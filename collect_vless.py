@@ -1,6 +1,6 @@
 
 #!/usr/bin/env python3
-"""Collect VLESS links, test with sing-box and write working_vless.txt."""
+"""Collect VLESS links, test them with sing-box, write working_vless.txt."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://outlinekeys.com/protocols/vless/"
 MAX_PAGES = max(1, int(os.getenv("MAX_PAGES", "5")))
-MAX_NODES = max(1, int(os.getenv("MAX_NODES", "100")))
+MAX_NODES = max(1, int(os.getenv("MAX_NODES", "3")))
 TEST_TIMEOUT = max(4, int(os.getenv("TEST_TIMEOUT", "12")))
 HTTP_TEST_URL = os.getenv(
     "HTTP_TEST_URL",
@@ -35,7 +35,7 @@ VLESS_RE = re.compile(r"vless://[^\s<>\"'`]+", re.IGNORECASE)
 
 
 def collect_uris() -> list[str]:
-    """Find key detail pages and extract VLESS URIs."""
+    """Collect VLESS URIs from key detail pages."""
 
     session = requests.Session()
     session.headers.update({
@@ -137,7 +137,7 @@ def collect_uris() -> list[str]:
 
 
 def to_singbox_outbound(uri: str) -> dict | None:
-    """Convert a supported VLESS URI to a sing-box outbound."""
+    """Convert a supported VLESS URI into a sing-box outbound."""
 
     try:
         parsed = urlparse(uri)
@@ -235,6 +235,7 @@ def to_singbox_outbound(uri: str) -> dict | None:
 
         elif transport in ("tcp", "raw"):
             header = params.get("header", "none").lower()
+
             if header not in ("", "none"):
                 return None
 
@@ -265,7 +266,7 @@ def available_port() -> int:
 
 
 def test_uri(uri: str) -> bool:
-    """Test one profile and print the failure stage without exposing URI."""
+    """Test a profile and report errors without printing the URI."""
 
     outbound = to_singbox_outbound(uri)
 
@@ -310,7 +311,7 @@ def test_uri(uri: str) -> bool:
                 message = (check.stderr or check.stdout).strip()
                 print(
                     "[DEBUG] sing-box config check failed: "
-                    + (message[:400] or "no diagnostic output")
+                    + (message[:500] or "no diagnostic output")
                 )
                 return False
 
@@ -335,7 +336,10 @@ def test_uri(uri: str) -> bool:
                             )
                             print(
                                 "[DEBUG] sing-box exited early: "
-                                + (message.strip()[:400] or "no error output")
+                                + (
+                                    message.strip()[:500]
+                                    or "no error output"
+                                )
                             )
                             return False
 
@@ -379,9 +383,17 @@ def test_uri(uri: str) -> bool:
                             or f"curl exit code {result.returncode}"
                         )
                         print(
-                            "[DEBUG] HTTP connectivity test failed: "
-                            + message[:300]
+                            f"[DEBUG] HTTP test failed "
+                            f"(curl exit={result.returncode}): "
+                            f"{message[:300]}"
                         )
+
+                        if proc.poll() is not None and proc.stderr:
+                            print(
+                                "[DEBUG] sing-box log: "
+                                + proc.stderr.read()[:1000]
+                            )
+
                         return False
 
                     return True
@@ -400,7 +412,7 @@ def test_uri(uri: str) -> bool:
             print("[DEBUG] A subprocess timed out.")
             return False
         except OSError as exc:
-            print(f"[DEBUG] Could not run test: {type(exc).__name__}")
+            print(f"[DEBUG] Test exception: {type(exc).__name__}")
             return False
 
 
