@@ -21,8 +21,9 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://outlinekeys.com/protocols/vless/"
 MAX_PAGES = max(1, int(os.getenv("MAX_PAGES", "5")))
-MAX_NODES = max(1, int(os.getenv("MAX_NODES", "3")))
-TEST_TIMEOUT = max(4, int(os.getenv("TEST_TIMEOUT", "12")))
+MAX_NODES = max(1, int(os.getenv("MAX_NODES", "10")))
+TEST_TIMEOUT = max(4, int(os.getenv("TEST_TIMEOUT", "15")))
+PAGE_TIMEOUT = max(5, int(os.getenv("PAGE_TIMEOUT", "35")))
 HTTP_TEST_URL = os.getenv(
     "HTTP_TEST_URL",
     "https://www.gstatic.com/generate_204",
@@ -34,30 +35,43 @@ SING_BOX = os.getenv("SING_BOX_BIN", "sing-box")
 VLESS_RE = re.compile(r"vless://[^\s<>\"'`]+", re.IGNORECASE)
 
 
-def collect_uris() -> list[str]:
-    """Collect VLESS URIs from key detail pages."""
-
+def make_session() -> requests.Session:
     session = requests.Session()
     session.headers.update({
         "User-Agent": (
-            "Mozilla/5.0 (compatible; VlessSubscriptionUpdater/1.0)"
+            "Mozilla/5.0 (X11; Linux x86_64) "
+            "AppleWebKit/537.36 Chrome/131.0 Safari/537.36"
         )
     })
+    return session
 
+
+def collect_uris() -> list[str]:
+    """Collect VLESS URIs from key detail pages."""
+    session = make_session()
     detail_pages: list[str] = []
     seen_pages: set[str] = set()
 
     for page in range(1, MAX_PAGES + 1):
         url = BASE_URL if page == 1 else f"{BASE_URL}?page={page}"
+        response = None
 
-        try:
-            response = session.get(url, timeout=20)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            print(
-                f"[WARN] Listing page {page} failed: "
-                f"{type(exc).__name__}"
-            )
+        for attempt in range(1, 4):
+            try:
+                response = session.get(
+                    url,
+                    timeout=(10, PAGE_TIMEOUT),
+                )
+                response.raise_for_status()
+                break
+            except requests.RequestException as exc:
+                print(
+                    f"[WARN] Listing page {page}, "
+                    f"attempt {attempt}/3: {type(exc).__name__}"
+                )
+                time.sleep(attempt)
+
+        if response is None or response.status_code != 200:
             continue
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -75,7 +89,7 @@ def collect_uris() -> list[str]:
                 detail_pages.append(full_url)
 
         print(
-            f"[INFO] Page {page}: "
+            f"[INFO] Listing page {page}: "
             f"{len(detail_pages)} key pages found."
         )
 
@@ -88,14 +102,24 @@ def collect_uris() -> list[str]:
         if len(uris) >= MAX_NODES:
             break
 
-        try:
-            response = session.get(detail_url, timeout=20)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            print(
-                f"[WARN] Detail page {index} failed: "
-                f"{type(exc).__name__}"
-            )
+        response = None
+
+        for attempt in range(1, 4):
+            try:
+                response = session.get(
+                    detail_url,
+                    timeout=(10, PAGE_TIMEOUT),
+                )
+                response.raise_for_status()
+                break
+            except requests.RequestException as exc:
+                print(
+                    f"[WARN] Detail page {index}, "
+                    f"attempt {attempt}/3: {type(exc).__name__}"
+                )
+                time.sleep(attempt)
+
+        if response is None or response.status_code != 200:
             continue
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -128,7 +152,7 @@ def collect_uris() -> list[str]:
 
         if index % 10 == 0:
             print(
-                f"[INFO] Checked {index} pages; "
+                f"[INFO] Checked {index} detail pages; "
                 f"found {len(uris)} URI(s)."
             )
 
@@ -137,8 +161,7 @@ def collect_uris() -> list[str]:
 
 
 def to_singbox_outbound(uri: str) -> dict | None:
-    """Convert a supported VLESS URI into a sing-box outbound."""
-
+    """Convert a VLESS URI into a sing-box outbound configuration."""
     try:
         parsed = urlparse(uri)
 
@@ -148,6 +171,7 @@ def to_singbox_outbound(uri: str) -> dict | None:
             or not parsed.username
             or not parsed.port
         ):
+            print("[DEBUG] Invalid VLESS URI structure.")
             return None
 
         params = {
@@ -166,8 +190,9 @@ def to_singbox_outbound(uri: str) -> dict | None:
             "uuid": unquote(parsed.username),
         }
 
-        if params.get("flow"):
-            outbound["flow"] = params["flow"]
+        flow = params.get("flow", "").strip()
+        if flow:
+            outbound["flow"] = flow
 
         security = params.get("security", "").lower()
         sni = (
@@ -194,9 +219,13 @@ def to_singbox_outbound(uri: str) -> dict | None:
                 short_id = params.get("sid") or params.get("shortid", "")
 
                 if not public_key:
+                    print("[DEBUG] Reality URI has no public key.")
                     return None
 
-                tls["reality"] = {"public_key": public_key}
+                tls["reality"] = {
+                    "enabled": True,
+                    "public_key": public_key,
+                }
 
                 if short_id:
                     tls["reality"]["short_id"] = short_id
@@ -204,6 +233,7 @@ def to_singbox_outbound(uri: str) -> dict | None:
             outbound["tls"] = tls
 
         elif security not in ("", "none"):
+            print("[DEBUG] Unsupported security type.")
             return None
 
         transport = params.get("type", "tcp").lower()
@@ -235,8 +265,8 @@ def to_singbox_outbound(uri: str) -> dict | None:
 
         elif transport in ("tcp", "raw"):
             header = params.get("header", "none").lower()
-
             if header not in ("", "none"):
+                print("[DEBUG] Unsupported TCP header mode.")
                 return None
 
         elif transport in ("httpupgrade", "http-upgrade"):
@@ -251,11 +281,13 @@ def to_singbox_outbound(uri: str) -> dict | None:
             outbound["transport"] = item
 
         else:
+            print("[DEBUG] Unsupported transport type.")
             return None
 
         return outbound
 
     except (ValueError, TypeError, KeyError):
+        print("[DEBUG] Could not parse VLESS URI.")
         return None
 
 
@@ -266,18 +298,16 @@ def available_port() -> int:
 
 
 def test_uri(uri: str) -> bool:
-    """Test a profile and report errors without printing the URI."""
-
+    """Test a profile without logging its URI or credentials."""
     outbound = to_singbox_outbound(uri)
 
     if outbound is None:
-        print("[DEBUG] Unsupported URI format or parameters.")
         return False
 
     port = available_port()
 
     config = {
-        "log": {"level": "info"},
+        "log": {"level": "debug"},
         "inbounds": [{
             "type": "socks",
             "tag": "local-socks",
@@ -303,45 +333,39 @@ def test_uri(uri: str) -> bool:
                 [SING_BOX, "check", "-c", str(config_path)],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=15,
                 check=False,
             )
 
             if check.returncode != 0:
                 message = (check.stderr or check.stdout).strip()
                 print(
-                    "[DEBUG] sing-box config check failed: "
-                    + (message[:500] or "no diagnostic output")
+                    "[DEBUG] Config validation failed: "
+                    + (message[:600] or "no diagnostic output")
                 )
                 return False
 
-            with open(os.devnull, "w") as devnull:
+            log_path = Path(tmp) / "sing-box.log"
+
+            with log_path.open("w", encoding="utf-8") as log_file:
                 proc = subprocess.Popen(
                     [SING_BOX, "run", "-c", str(config_path)],
-                    stdout=devnull,
-                    stderr=subprocess.PIPE,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
                     text=True,
                 )
 
                 try:
-                    deadline = time.monotonic() + 8
+                    deadline = time.monotonic() + 10
                     ready = False
 
                     while time.monotonic() < deadline:
                         if proc.poll() is not None:
-                            message = (
-                                proc.stderr.read()
-                                if proc.stderr
-                                else ""
-                            )
                             print(
-                                "[DEBUG] sing-box exited early: "
-                                + (
-                                    message.strip()[:500]
-                                    or "no error output"
-                                )
+                                "[DEBUG] sing-box exited early "
+                                f"(code {proc.returncode})."
                             )
-                            return False
+                            break
 
                         try:
                             with socket.create_connection(
@@ -373,7 +397,7 @@ def test_uri(uri: str) -> bool:
                         ],
                         capture_output=True,
                         text=True,
-                        timeout=TEST_TIMEOUT + 3,
+                        timeout=TEST_TIMEOUT + 5,
                         check=False,
                     )
 
@@ -388,20 +412,30 @@ def test_uri(uri: str) -> bool:
                             f"{message[:300]}"
                         )
 
-                        if proc.poll() is not None and proc.stderr:
-                            print(
-                                "[DEBUG] sing-box log: "
-                                + proc.stderr.read()[:1000]
+                        # Include sing-box diagnostic messages but never
+                        # print the generated configuration or URI.
+                        try:
+                            log_file.flush()
+                            log_text = log_path.read_text(
+                                encoding="utf-8",
+                                errors="replace",
                             )
+                            if log_text.strip():
+                                print(
+                                    "[DEBUG] sing-box log:\n"
+                                    + log_text[-2500:]
+                                )
+                        except OSError:
+                            pass
 
                         return False
 
+                    print("[DEBUG] HTTP connectivity test passed.")
                     return True
 
                 finally:
                     if proc.poll() is None:
                         proc.terminate()
-
                         try:
                             proc.wait(timeout=3)
                         except subprocess.TimeoutExpired:
