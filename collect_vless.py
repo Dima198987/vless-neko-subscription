@@ -1,9 +1,5 @@
-
-#!/usr/bin/env python3
-"""Collect VLESS links, test them with sing-box, write working_vless.txt."""
-
-from __future__ import annotations
-
+```python
+import html
 import json
 import os
 import re
@@ -13,202 +9,214 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 import requests
 from bs4 import BeautifulSoup
 
 
+# ---------- Settings ----------
+
 BASE_URL = "https://outlinekeys.com/protocols/vless/"
+OUTPUT_FILE = Path("working_vless.txt")
 
-MAX_PAGES = max(1, int(os.getenv("MAX_PAGES", "5")))
+HTTP_TEST_URL = os.getenv("HTTP_TEST_URL", "https://example.com/").strip()
 MAX_NODES = max(1, int(os.getenv("MAX_NODES", "10")))
-PAGE_TIMEOUT = max(5, int(os.getenv("PAGE_TIMEOUT", "35")))
-TEST_TIMEOUT = max(5, int(os.getenv("TEST_TIMEOUT", "15")))
+MAX_LIST_PAGES = max(1, int(os.getenv("MAX_LIST_PAGES", "5")))
 
-HTTP_TEST_URL = os.getenv(
-    "HTTP_TEST_URL",
-    "https://example.com/",
-)
+PAGE_TIMEOUT = 35
+TEST_TIMEOUT = max(5, int(os.getenv("TEST_TIMEOUT", "18")))
+RETRIES = 3
 
-OUTPUT = Path("working_vless.txt")
 SING_BOX = os.getenv("SING_BOX_BIN", "sing-box")
+CURL = shutil.which("curl")
 
-VLESS_RE = re.compile(r"vless://[^\s<>\"'`]+", re.IGNORECASE)
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 Chrome/131.0 Safari/537.36"
+    )
+}
 
-
-def make_session() -> requests.Session:
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64) "
-            "AppleWebKit/537.36 Chrome/131.0 Safari/537.36"
-        )
-    })
-    return session
+VLESS_RE = re.compile(r"vless://[^\s\"'<>]+", re.IGNORECASE)
 
 
-def fetch_page(
-    session: requests.Session,
-    url: str,
-    description: str,
-) -> requests.Response | None:
-    """Fetch a page with retries."""
-    for attempt in range(1, 4):
+# ---------- HTTP helpers ----------
+
+def fetch_page(url):
+    last_error = None
+
+    for attempt in range(1, RETRIES + 1):
         try:
-            response = session.get(
+            response = requests.get(
                 url,
-                timeout=(10, PAGE_TIMEOUT),
+                headers=HEADERS,
+                timeout=PAGE_TIMEOUT,
             )
             response.raise_for_status()
-            return response
+            return response.text
         except requests.RequestException as exc:
+            last_error = exc
             print(
-                f"[WARN] {description}, attempt "
-                f"{attempt}/3: {type(exc).__name__}"
+                f"[WARN] Request attempt {attempt}/{RETRIES} failed "
+                f"for {url}: {type(exc).__name__}"
             )
-            if attempt < 3:
-                time.sleep(attempt * 2)
+            time.sleep(attempt)
+
+    print(f"[WARN] Could not fetch page: {url}")
+    if last_error:
+        print(f"[WARN] Last error: {last_error}")
 
     return None
 
 
-def collect_uris() -> list[str]:
-    """Collect VLESS URIs from key detail pages."""
-    session = make_session()
-    detail_pages: list[str] = []
-    seen_pages: set[str] = set()
+def find_key_pages(page_html, page_url):
+    soup = BeautifulSoup(page_html, "html.parser")
+    found = set()
 
-    for page in range(1, MAX_PAGES + 1):
-        url = BASE_URL if page == 1 else f"{BASE_URL}?page={page}"
-        response = fetch_page(session, url, f"Listing page {page}")
+    for link in soup.select("a[href]"):
+        href = link.get("href", "").strip()
+        absolute = urljoin(page_url, href)
+        parsed = urlsplit(absolute)
 
-        if response is None:
+        if parsed.netloc.lower() != "outlinekeys.com":
             continue
 
-        soup = BeautifulSoup(response.text, "html.parser")
+        if re.search(r"/key/[^/]+/?$", parsed.path):
+            found.add(absolute.split("#", 1)[0])
 
-        for link in soup.find_all("a", href=True):
-            full_url = requests.compat.urljoin(url, link["href"])
-            parsed = urlparse(full_url)
+    return found
 
-            if (
-                parsed.netloc.lower() == "outlinekeys.com"
-                and re.fullmatch(r"/key/\d+/?", parsed.path)
-                and full_url not in seen_pages
-            ):
-                seen_pages.add(full_url)
-                detail_pages.append(full_url)
+
+def collect_detail_pages():
+    all_pages = set()
+
+    for page_number in range(1, MAX_LIST_PAGES + 1):
+        listing_url = f"{BASE_URL}?page={page_number}"
+        page_html = fetch_page(listing_url)
+
+        if not page_html:
+            continue
+
+        page_keys = find_key_pages(page_html, listing_url)
+        all_pages.update(page_keys)
 
         print(
-            f"[INFO] Listing page {page}: "
-            f"{len(detail_pages)} key pages found."
+            f"[INFO] Listing page {page_number}: "
+            f"{len(all_pages)} key pages found."
         )
 
-    print(f"[INFO] Total key pages: {len(detail_pages)}")
-
-    uris: list[str] = []
-    seen_uris: set[str] = set()
-
-    for index, detail_url in enumerate(detail_pages, start=1):
-        if len(uris) >= MAX_NODES:
+        if not page_keys:
+            print(
+                "[INFO] No key pages found on this listing page; "
+                "stopping pagination."
+            )
             break
 
-        response = fetch_page(
-            session,
-            detail_url,
-            f"Detail page {index}",
-        )
+    return sorted(all_pages)
 
-        if response is None:
-            continue
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        chunks = [response.text, soup.get_text(" ", strip=True)]
+def extract_uris(detail_html):
+    decoded = html.unescape(detail_html)
+    soup = BeautifulSoup(decoded, "html.parser")
 
-        for tag in soup.find_all(True):
-            for attr in (
-                "href",
-                "data-clipboard-text",
-                "data-copy",
-                "value",
-            ):
-                value = tag.get(attr)
-                if isinstance(value, str):
-                    chunks.append(value)
+    text_parts = [decoded, soup.get_text(" ", strip=True)]
 
-        for chunk in chunks:
-            for match in VLESS_RE.findall(chunk):
-                uri = match.rstrip(".,;)]}").replace("&amp;", "&")
+    for element in soup.select("[href], [data-clipboard-text]"):
+        for attr in ("href", "data-clipboard-text"):
+            value = element.get(attr)
+            if value:
+                text_parts.append(html.unescape(value))
 
-                if uri not in seen_uris:
-                    seen_uris.add(uri)
-                    uris.append(uri)
+    found = set()
 
-                    if len(uris) >= MAX_NODES:
-                        break
+    for text in text_parts:
+        for match in VLESS_RE.findall(text):
+            uri = match.rstrip(".,;)]}")
+            if uri.lower().startswith("vless://"):
+                found.add(uri)
 
-            if len(uris) >= MAX_NODES:
-                break
+    return found
 
-        if index % 10 == 0:
+
+def collect_vless_uris(detail_pages):
+    uris = set()
+
+    for index, detail_url in enumerate(detail_pages, start=1):
+        page_html = fetch_page(detail_url)
+
+        if page_html:
+            uris.update(extract_uris(page_html))
+
+        if index % 10 == 0 or index == len(detail_pages):
             print(
                 f"[INFO] Checked {index} detail pages; "
                 f"found {len(uris)} URI(s)."
             )
 
-    print(f"[INFO] Found {len(uris)} unique URI(s).")
-    return uris[:MAX_NODES]
+    return sorted(uris)
 
 
-def to_singbox_outbound(uri: str) -> dict | None:
-    """Convert a VLESS URI into a sing-box outbound."""
+# ---------- VLESS URI -> sing-box ----------
+
+def first_param(params, *names, default=""):
+    for name in names:
+        values = params.get(name)
+        if values and values[0] != "":
+            return values[0]
+    return default
+
+
+def to_singbox_outbound(uri):
     try:
-        parsed = urlparse(uri)
+        parsed = urlsplit(uri)
+        if parsed.scheme.lower() != "vless":
+            raise ValueError("URI scheme is not vless")
 
-        if (
-            parsed.scheme.lower() != "vless"
-            or not parsed.hostname
-            or not parsed.username
-            or not parsed.port
-        ):
-            print("[DEBUG] Invalid VLESS URI structure.")
-            return None
+        if not parsed.hostname or not parsed.port:
+            raise ValueError("URI must contain a server hostname and port")
 
-        params = {
-            key.lower(): values[-1]
-            for key, values in parse_qs(
-                parsed.query,
-                keep_blank_values=True,
-            ).items()
-        }
+        uuid = unquote(parsed.username or "")
+        if not uuid:
+            raise ValueError("URI does not contain a UUID")
 
-        outbound: dict = {
+        params = parse_qs(parsed.query, keep_blank_values=True)
+
+        security = first_param(params, "security", default="none").lower()
+        transport_type = first_param(
+            params, "type", "network", default="tcp"
+        ).lower()
+
+        outbound = {
             "type": "vless",
             "tag": "proxy",
             "server": parsed.hostname,
             "server_port": parsed.port,
-            "uuid": unquote(parsed.username),
+            "uuid": uuid,
         }
 
-        flow = params.get("flow", "").strip()
+        flow = first_param(params, "flow")
         if flow:
             outbound["flow"] = flow
 
-        security = params.get("security", "").lower()
-        sni = (
-            params.get("sni")
-            or params.get("servername")
-            or params.get("host")
-        )
-        fingerprint = params.get("fp") or params.get("fingerprint")
-
         if security in ("tls", "reality"):
-            tls: dict = {"enabled": True}
+            server_name = first_param(
+                params, "sni", "serverName", "servername",
+                default=parsed.hostname,
+            )
 
-            if sni:
-                tls["server_name"] = sni
+            tls = {
+                "enabled": True,
+                "server_name": server_name,
+            }
 
+            alpn = first_param(params, "alpn")
+            if alpn:
+                tls["alpn"] = [
+                    item.strip() for item in alpn.split(",") if item.strip()
+                ]
+
+            fingerprint = first_param(params, "fp", "fingerprint")
             if fingerprint:
                 tls["utls"] = {
                     "enabled": True,
@@ -216,274 +224,307 @@ def to_singbox_outbound(uri: str) -> dict | None:
                 }
 
             if security == "reality":
-                public_key = params.get("pbk") or params.get("publickey")
-                short_id = params.get("sid") or params.get("shortid", "")
+                public_key = first_param(params, "pbk", "publicKey")
+                short_id = first_param(params, "sid", "shortId")
 
                 if not public_key:
-                    print("[DEBUG] Reality public key is missing.")
-                    return None
+                    raise ValueError(
+                        "Reality URI is missing its public key (pbk)"
+                    )
 
-                tls["reality"] = {
+                reality = {
                     "enabled": True,
                     "public_key": public_key,
                 }
-
                 if short_id:
-                    tls["reality"]["short_id"] = short_id
+                    reality["short_id"] = short_id
+
+                tls["reality"] = reality
 
             outbound["tls"] = tls
 
         elif security not in ("", "none"):
-            print("[DEBUG] Unsupported security type.")
-            return None
+            raise ValueError(f"Unsupported security type: {security}")
 
-        transport = params.get("type", "tcp").lower()
-        path = params.get("path", "")
-        host = params.get("host", "")
+        if transport_type in ("tcp", "raw", "none", ""):
+            pass
 
-        if transport == "ws":
-            item: dict = {"type": "ws"}
+        elif transport_type == "ws":
+            transport = {"type": "ws"}
 
+            path = first_param(params, "path")
             if path:
-                item["path"] = path
+                transport["path"] = unquote(path)
 
+            host = first_param(params, "host")
             if host:
-                item["headers"] = {"Host": host}
+                transport["headers"] = {"Host": host}
 
-            outbound["transport"] = item
+            outbound["transport"] = transport
 
-        elif transport == "grpc":
-            item = {"type": "grpc"}
-            service_name = (
-                params.get("servicename")
-                or params.get("service_name")
+        elif transport_type == "grpc":
+            transport = {"type": "grpc"}
+            service_name = first_param(
+                params, "serviceName", "service_name"
             )
-
             if service_name:
-                item["service_name"] = service_name
+                transport["service_name"] = service_name
 
-            outbound["transport"] = item
+            outbound["transport"] = transport
 
-        elif transport in ("tcp", "raw"):
-            header = params.get("header", "none").lower()
+        elif transport_type == "httpupgrade":
+            transport = {"type": "httpupgrade"}
 
-            if header not in ("", "none"):
-                print("[DEBUG] Unsupported TCP header mode.")
-                return None
-
-        elif transport in ("httpupgrade", "http-upgrade"):
-            item = {"type": "httpupgrade"}
-
+            path = first_param(params, "path")
             if path:
-                item["path"] = path
+                transport["path"] = unquote(path)
 
+            host = first_param(params, "host")
             if host:
-                item["host"] = host
+                transport["headers"] = {"Host": host}
 
-            outbound["transport"] = item
+            outbound["transport"] = transport
 
         else:
-            print("[DEBUG] Unsupported transport type.")
-            return None
+            raise ValueError(
+                f"Unsupported transport type: {transport_type}"
+            )
 
         return outbound
 
-    except (ValueError, TypeError, KeyError):
-        print("[DEBUG] Could not parse VLESS URI.")
-        return None
+    except (ValueError, TypeError) as exc:
+        # Do not include the original URI in the error message.
+        raise ValueError(str(exc)) from None
 
 
-def available_port() -> int:
-    with socket.socket() as sock:
+# ---------- sing-box test ----------
+
+def reserve_local_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+        return sock.getsockname()[1]
 
 
-def test_uri(uri: str) -> bool:
-    """Test a VLESS profile without printing the URI."""
-    outbound = to_singbox_outbound(uri)
+def wait_for_listener(process, port, timeout=5):
+    deadline = time.monotonic() + timeout
 
-    if outbound is None:
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            return False
+
+        try:
+            with socket.create_connection(
+                ("127.0.0.1", port), timeout=0.25
+            ):
+                return True
+        except OSError:
+            time.sleep(0.1)
+
+    return False
+
+
+def test_uri(uri, index):
+    if not CURL:
+        print("[ERROR] curl is not installed.")
         return False
 
-    port = available_port()
+    try:
+        outbound = to_singbox_outbound(uri)
+    except ValueError as exc:
+        print(f"[INFO] Node {index}: unsupported URI settings: {exc}")
+        return False
+
+    port = reserve_local_port()
 
     config = {
-        "log": {"level": "debug"},
-        "inbounds": [{
-            "type": "socks",
-            "tag": "local-socks",
-            "listen": "127.0.0.1",
-            "listen_port": port,
-        }],
+        "log": {
+            "level": "debug",
+            "timestamp": True,
+        },
+        "inbounds": [
+            {
+                "type": "socks",
+                "tag": "local-socks",
+                "listen": "127.0.0.1",
+                "listen_port": port,
+            }
+        ],
         "outbounds": [
             outbound,
-            {"type": "direct", "tag": "direct"},
+            {
+                "type": "direct",
+                "tag": "direct",
+            },
         ],
-        "route": {"final": "proxy"},
+        "route": {
+            "final": "proxy",
+        },
     }
 
-    with tempfile.TemporaryDirectory(prefix="vless-check-") as tmp:
-        config_path = Path(tmp) / "config.json"
-        log_path = Path(tmp) / "sing-box.log"
+    with tempfile.TemporaryDirectory(prefix="vless-test-") as temp_dir:
+        config_path = Path(temp_dir) / "config.json"
+        log_path = Path(temp_dir) / "sing-box.log"
 
         config_path.write_text(
-            json.dumps(config),
+            json.dumps(config, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
-        try:
-            check = subprocess.run(
-                [SING_BOX, "check", "-c", str(config_path)],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
-
-            if check.returncode != 0:
-                message = (check.stderr or check.stdout).strip()
-                print(
-                    "[DEBUG] Config validation failed: "
-                    + (message[:600] or "no diagnostic output")
-                )
-                return False
-
-            with log_path.open("w", encoding="utf-8") as log_file:
-                proc = subprocess.Popen(
-                    [SING_BOX, "run", "-c", str(config_path)],
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                )
-
-                try:
-                    deadline = time.monotonic() + 10
-                    ready = False
-
-                    while time.monotonic() < deadline:
-                        if proc.poll() is not None:
-                            print(
-                                "[DEBUG] sing-box exited early "
-                                f"(code {proc.returncode})."
-                            )
-                            break
-
-                        try:
-                            with socket.create_connection(
-                                ("127.0.0.1", port),
-                                timeout=0.5,
-                            ):
-                                ready = True
-                                break
-                        except OSError:
-                            time.sleep(0.2)
-
-                    if not ready:
-                        print("[DEBUG] SOCKS listener did not start.")
-                        return False
-
-                    result = subprocess.run(
-                        [
-                            "curl",
-                            "--silent",
-                            "--show-error",
-                            "--fail",
-                            "--max-time",
-                            str(TEST_TIMEOUT),
-                            "--proxy",
-                            f"socks5h://127.0.0.1:{port}",
-                            HTTP_TEST_URL,
-                            "--output",
-                            os.devnull,
-                        ],
-                        capture_output=True,
-                        text=True,
-                        timeout=TEST_TIMEOUT + 5,
-                        check=False,
-                    )
-
-                    if result.returncode != 0:
-                        message = (
-                            result.stderr.strip()
-                            or f"curl exit code {result.returncode}"
-                        )
-
-                        print(
-                            f"[DEBUG] HTTP test failed "
-                            f"(curl exit={result.returncode}): "
-                            f"{message[:300]}"
-                        )
-
-                        log_file.flush()
-
-                        try:
-                            log_text = log_path.read_text(
-                                encoding="utf-8",
-                                errors="replace",
-                            )
-                            if log_text.strip():
-                                print(
-                                    "[DEBUG] sing-box log:\n"
-                                    + log_text[-2500:]
-                                )
-                        except OSError:
-                            pass
-
-                        return False
-
-                    print("[DEBUG] HTTP connectivity test passed.")
-                    return True
-
-                finally:
-                    if proc.poll() is None:
-                        proc.terminate()
-
-                        try:
-                            proc.wait(timeout=3)
-                        except subprocess.TimeoutExpired:
-                            proc.kill()
-                            proc.wait(timeout=2)
-
-        except subprocess.TimeoutExpired:
-            print("[DEBUG] A subprocess timed out.")
-            return False
-        except OSError as exc:
-            print(f"[DEBUG] Test exception: {type(exc).__name__}")
-            return False
-
-
-def main() -> None:
-    if not shutil.which(SING_BOX):
-        raise SystemExit("sing-box binary not found in PATH")
-
-    if not shutil.which("curl"):
-        raise SystemExit("curl binary not found in PATH")
-
-    candidates = collect_uris()
-    working: list[str] = []
-
-    for index, uri in enumerate(candidates, start=1):
-        passed = test_uri(uri)
-
-        print(
-            f"[INFO] Tested {index}/{len(candidates)}: "
-            f"{'PASS' if passed else 'FAIL'}"
+        check = subprocess.run(
+            [SING_BOX, "check", "-c", str(config_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
 
-        if passed:
+        if check.returncode != 0:
+            print(f"[INFO] Node {index}: sing-box config rejected.")
+            details = (check.stderr or check.stdout or "").strip()
+            if details:
+                print("[DEBUG] " + details[-1800:])
+            return False
+
+        with log_path.open("w", encoding="utf-8") as log_file:
+            process = subprocess.Popen(
+                [SING_BOX, "run", "-c", str(config_path)],
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+
+            try:
+                if not wait_for_listener(process, port):
+                    print(
+                        f"[INFO] Node {index}: "
+                        "sing-box did not start its SOCKS listener."
+                    )
+                    return False
+
+                result = subprocess.run(
+                    [
+                        CURL,
+                        "--silent",
+                        "--show-error",
+                        "--output", os.devnull,
+                        "--write-out", "%{http_code}",
+                        "--connect-timeout", "8",
+                        "--max-time", str(TEST_TIMEOUT),
+                        "--socks5-hostname", f"127.0.0.1:{port}",
+                        HTTP_TEST_URL,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=TEST_TIMEOUT + 5,
+                )
+
+                status_text = (result.stdout or "").strip()
+                try:
+                    status = int(status_text[-3:])
+                except (ValueError, IndexError):
+                    status = 0
+
+                # A real HTTP response is required. 2xx and 3xx count
+                # as successful; curl exit code alone is not enough.
+                if result.returncode == 0 and 200 <= status < 400:
+                    print(
+                        f"[INFO] Node {index}: PASS "
+                        f"(HTTP {status})"
+                    )
+                    return True
+
+                print(
+                    f"[DEBUG] Node {index}: HTTP test failed "
+                    f"(curl exit={result.returncode}, "
+                    f"HTTP={status or 'none'})."
+                )
+
+                error_text = (result.stderr or "").strip()
+                if error_text:
+                    print("[DEBUG] curl: " + error_text[-1000:])
+
+                return False
+
+            except subprocess.TimeoutExpired:
+                print(f"[DEBUG] Node {index}: HTTP test timed out.")
+                return False
+
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=2)
+
+                try:
+                    log_text = log_path.read_text(
+                        encoding="utf-8", errors="replace"
+                    )
+                    if log_text:
+                        print("[DEBUG] sing-box log:")
+                        print(log_text[-2500:])
+                except OSError:
+                    pass
+
+
+# ---------- Main ----------
+
+def main():
+    print(f"[INFO] HTTP_TEST_URL={HTTP_TEST_URL}")
+    print(f"[INFO] MAX_NODES={MAX_NODES}")
+    print(f"[INFO] MAX_LIST_PAGES={MAX_LIST_PAGES}")
+
+    if not shutil.which(SING_BOX):
+        raise SystemExit(
+            f"[ERROR] sing-box executable not found: {SING_BOX}"
+        )
+
+    if not CURL:
+        raise SystemExit("[ERROR] curl executable not found.")
+
+    detail_pages = collect_detail_pages()
+    print(f"[INFO] Total key pages: {len(detail_pages)}")
+
+    if not detail_pages:
+        raise SystemExit(
+            "[ERROR] No detail pages found. Check the source website."
+        )
+
+    uris = collect_vless_uris(detail_pages)
+    print(f"[INFO] Found {len(uris)} unique URI(s).")
+
+    if not uris:
+        OUTPUT_FILE.write_text("", encoding="utf-8")
+        raise SystemExit("[ERROR] No VLESS URIs were extracted.")
+
+    working = []
+    test_count = min(MAX_NODES, len(uris))
+
+    for index, uri in enumerate(uris[:test_count], start=1):
+        print(f"[INFO] Testing node {index}/{test_count}.")
+
+        if test_uri(uri, index):
             working.append(uri)
 
-    OUTPUT.write_text(
-        "\n".join(working) + ("\n" if working else ""),
+    OUTPUT_FILE.write_text(
+        "".join(uri + "\n" for uri in working),
         encoding="utf-8",
     )
 
     print(
-        f"[INFO] Wrote {len(working)} working profile(s) "
-        f"to {OUTPUT}."
+        f"[INFO] Finished: {len(working)} working node(s) "
+        f"out of {test_count} tested."
     )
+    print(f"[INFO] Results saved to {OUTPUT_FILE}")
+
+    if not working:
+        print(
+            "[WARN] No nodes passed the HTTP test. "
+            "The output file is empty; no unverified nodes were added."
+        )
 
 
 if __name__ == "__main__":
     main()
+```
