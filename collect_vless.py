@@ -1,5 +1,6 @@
+
 #!/usr/bin/env python3
-"""Collect VLESS URIs, test with sing-box and HTTP, write working_vless.txt."""
+"""Collect VLESS links, test with sing-box and write working_vless.txt."""
 
 from __future__ import annotations
 
@@ -7,7 +8,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import socket
 import subprocess
 import tempfile
@@ -25,58 +25,34 @@ MAX_NODES = max(1, int(os.getenv("MAX_NODES", "100")))
 TEST_TIMEOUT = max(4, int(os.getenv("TEST_TIMEOUT", "12")))
 HTTP_TEST_URL = os.getenv(
     "HTTP_TEST_URL",
-    "https://www.gstatic.com/generate_204"
+    "https://www.gstatic.com/generate_204",
 )
 
 OUTPUT = Path("working_vless.txt")
 SING_BOX = os.getenv("SING_BOX_BIN", "sing-box")
 
-VLESS_RE = re.compile(
-    r"vless://[^\s<>\"'`]+",
-    re.IGNORECASE
-)
+VLESS_RE = re.compile(r"vless://[^\s<>\"'`]+", re.IGNORECASE)
 
 
 def collect_uris() -> list[str]:
-    """
-    Collect VLESS links from OutlineKeys:
-    1. Open protocol listing pages.
-    2. Find key detail pages.
-    3. Extract vless:// links from detail pages.
-    """
+    """Find key detail pages and extract VLESS URIs."""
 
     session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent":
+    session.headers.update({
+        "User-Agent": (
             "Mozilla/5.0 (compatible; VlessSubscriptionUpdater/1.0)"
-        }
-    )
+        )
+    })
 
-    detail_pages = []
-    seen_pages = set()
-
-    uris = []
-    seen_uris = set()
-
-
-    # Step 1: collect detail pages
+    detail_pages: list[str] = []
+    seen_pages: set[str] = set()
 
     for page in range(1, MAX_PAGES + 1):
-
-        url = (
-            BASE_URL
-            if page == 1
-            else f"{BASE_URL}?page={page}"
-        )
+        url = BASE_URL if page == 1 else f"{BASE_URL}?page={page}"
 
         try:
-            response = session.get(
-                url,
-                timeout=20
-            )
+            response = session.get(url, timeout=20)
             response.raise_for_status()
-
         except requests.RequestException as exc:
             print(
                 f"[WARN] Listing page {page} failed: "
@@ -84,150 +60,86 @@ def collect_uris() -> list[str]:
             )
             continue
 
+        soup = BeautifulSoup(response.text, "html.parser")
 
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
-        )
-
-
-        for link in soup.find_all(
-            "a",
-            href=True
-        ):
-
-            href = link["href"]
-
-            full_url = requests.compat.urljoin(
-                url,
-                href
-            )
-
+        for link in soup.find_all("a", href=True):
+            full_url = requests.compat.urljoin(url, link["href"])
             parsed = urlparse(full_url)
 
-
             if (
-                parsed.netloc.lower()
-                == "outlinekeys.com"
-                and re.fullmatch(
-                    r"/key/\d+/?",
-                    parsed.path
-                )
+                parsed.netloc.lower() == "outlinekeys.com"
+                and re.fullmatch(r"/key/\d+/?", parsed.path)
+                and full_url not in seen_pages
             ):
-
-                if full_url not in seen_pages:
-
-                    seen_pages.add(full_url)
-                    detail_pages.append(full_url)
-
+                seen_pages.add(full_url)
+                detail_pages.append(full_url)
 
         print(
             f"[INFO] Page {page}: "
             f"{len(detail_pages)} key pages found."
         )
 
+    print(f"[INFO] Total key pages: {len(detail_pages)}")
 
-    print(
-        f"[INFO] Total key pages: {len(detail_pages)}"
-    )
+    uris: list[str] = []
+    seen_uris: set[str] = set()
 
-
-    # Step 2: extract VLESS links
-
-    for index, detail_url in enumerate(
-        detail_pages[:MAX_NODES],
-        start=1
-    ):
+    for index, detail_url in enumerate(detail_pages, start=1):
+        if len(uris) >= MAX_NODES:
+            break
 
         try:
-
-            response = session.get(
-                detail_url,
-                timeout=20
-            )
-
+            response = session.get(detail_url, timeout=20)
             response.raise_for_status()
-
         except requests.RequestException as exc:
-
             print(
-                f"[WARN] Key page failed: "
+                f"[WARN] Detail page {index} failed: "
                 f"{type(exc).__name__}"
             )
-
             continue
 
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
-        )
-
-
-        chunks = [
-            response.text,
-            soup.get_text(
-                " ",
-                strip=True
-            )
-        ]
-
+        soup = BeautifulSoup(response.text, "html.parser")
+        chunks = [response.text, soup.get_text(" ", strip=True)]
 
         for tag in soup.find_all(True):
-
             for attr in (
                 "href",
                 "data-clipboard-text",
                 "data-copy",
-                "value"
+                "value",
             ):
-
                 value = tag.get(attr)
-
-                if isinstance(
-                    value,
-                    str
-                ):
-
+                if isinstance(value, str):
                     chunks.append(value)
 
-
         for chunk in chunks:
-
             for match in VLESS_RE.findall(chunk):
-
-                uri = (
-                    match
-                    .rstrip(".,;)]}")
-                    .replace("&amp;", "&")
-                )
+                uri = match.rstrip(".,;)]}").replace("&amp;", "&")
 
                 if uri not in seen_uris:
-
                     seen_uris.add(uri)
                     uris.append(uri)
 
+                    if len(uris) >= MAX_NODES:
+                        break
+
+            if len(uris) >= MAX_NODES:
+                break
 
         if index % 10 == 0:
-
             print(
-                f"[INFO] Checked {index} pages, "
+                f"[INFO] Checked {index} pages; "
                 f"found {len(uris)} URI(s)."
             )
 
-
-    print(
-        f"[INFO] Found {len(uris)} unique URI(s)."
-    )
-
+    print(f"[INFO] Found {len(uris)} unique URI(s).")
     return uris[:MAX_NODES]
 
 
-
 def to_singbox_outbound(uri: str) -> dict | None:
+    """Convert a supported VLESS URI to a sing-box outbound."""
 
     try:
-
         parsed = urlparse(uri)
 
         if (
@@ -238,392 +150,291 @@ def to_singbox_outbound(uri: str) -> dict | None:
         ):
             return None
 
-
         params = {
             key.lower(): values[-1]
-            for key, values
-            in parse_qs(
+            for key, values in parse_qs(
                 parsed.query,
-                keep_blank_values=True
+                keep_blank_values=True,
             ).items()
         }
 
-
-        outbound = {
-
+        outbound: dict = {
             "type": "vless",
             "tag": "proxy",
             "server": parsed.hostname,
             "server_port": parsed.port,
-            "uuid": unquote(parsed.username)
-
+            "uuid": unquote(parsed.username),
         }
 
-
         if params.get("flow"):
-
             outbound["flow"] = params["flow"]
 
-
-        security = params.get(
-            "security",
-            ""
-        ).lower()
-
-
+        security = params.get("security", "").lower()
         sni = (
             params.get("sni")
             or params.get("servername")
             or params.get("host")
         )
+        fingerprint = params.get("fp") or params.get("fingerprint")
 
-
-        fingerprint = (
-            params.get("fp")
-            or params.get("fingerprint")
-        )
-
-
-        if security in (
-            "tls",
-            "reality"
-        ):
-
-            tls = {
-                "enabled": True
-            }
-
+        if security in ("tls", "reality"):
+            tls: dict = {"enabled": True}
 
             if sni:
-
                 tls["server_name"] = sni
 
-
             if fingerprint:
-
                 tls["utls"] = {
                     "enabled": True,
-                    "fingerprint": fingerprint
+                    "fingerprint": fingerprint,
                 }
-
 
             if security == "reality":
-
-                public_key = (
-                    params.get("pbk")
-                    or params.get("publickey")
-                )
-
+                public_key = params.get("pbk") or params.get("publickey")
+                short_id = params.get("sid") or params.get("shortid", "")
 
                 if not public_key:
-
                     return None
 
-
-                tls["reality"] = {
-                    "enabled": True,
-                    "public_key": public_key
-                }
-
-
-                short_id = (
-                    params.get("sid")
-                    or params.get("shortid")
-                )
-
+                tls["reality"] = {"public_key": public_key}
 
                 if short_id:
-
                     tls["reality"]["short_id"] = short_id
-
 
             outbound["tls"] = tls
 
-
-        elif security not in (
-            "",
-            "none"
-        ):
-
+        elif security not in ("", "none"):
             return None
 
-
-
-        transport = params.get(
-            "type",
-            "tcp"
-        ).lower()
-
-
-        path = params.get(
-            "path",
-            ""
-        )
-
-        host = params.get(
-            "host",
-            ""
-        )
-
+        transport = params.get("type", "tcp").lower()
+        path = params.get("path", "")
+        host = params.get("host", "")
 
         if transport == "ws":
-
-            item = {
-                "type": "ws"
-            }
+            item: dict = {"type": "ws"}
 
             if path:
-
                 item["path"] = path
 
-
             if host:
-
-                item["headers"] = {
-                    "Host": host
-                }
-
+                item["headers"] = {"Host": host}
 
             outbound["transport"] = item
 
-
         elif transport == "grpc":
-
-            item = {
-                "type": "grpc"
-            }
-
-
-            service = (
+            item = {"type": "grpc"}
+            service_name = (
                 params.get("servicename")
                 or params.get("service_name")
             )
 
-
-            if service:
-
-                item["service_name"] = service
-
+            if service_name:
+                item["service_name"] = service_name
 
             outbound["transport"] = item
 
+        elif transport in ("tcp", "raw"):
+            header = params.get("header", "none").lower()
+            if header not in ("", "none"):
+                return None
 
-        elif transport in (
-            "tcp",
-            "raw"
-        ):
+        elif transport in ("httpupgrade", "http-upgrade"):
+            item = {"type": "httpupgrade"}
 
-            pass
+            if path:
+                item["path"] = path
 
+            if host:
+                item["host"] = host
+
+            outbound["transport"] = item
 
         else:
-
             return None
-
 
         return outbound
 
-
-    except (
-        ValueError,
-        TypeError,
-        KeyError
-    ):
-
+    except (ValueError, TypeError, KeyError):
         return None
 
 
-
-def available_port():
-
+def available_port() -> int:
     with socket.socket() as sock:
-
-        sock.bind(
-            (
-                "127.0.0.1",
-                0
-            )
-        )
-
-        return sock.getsockname()[1]
-
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def test_uri(uri: str) -> bool:
+    """Test one profile and print the failure stage without exposing URI."""
 
     outbound = to_singbox_outbound(uri)
 
-
     if outbound is None:
-
+        print("[DEBUG] Unsupported URI format or parameters.")
         return False
-
 
     port = available_port()
 
-
     config = {
-
-        "log": {
-            "level": "error"
-        },
-
-        "inbounds": [
-
-            {
-                "type": "socks",
-                "listen": "127.0.0.1",
-                "listen_port": port
-            }
-
-        ],
-
+        "log": {"level": "info"},
+        "inbounds": [{
+            "type": "socks",
+            "tag": "local-socks",
+            "listen": "127.0.0.1",
+            "listen_port": port,
+        }],
         "outbounds": [
-
-            outbound
-
-        ]
-
+            outbound,
+            {"type": "direct", "tag": "direct"},
+        ],
+        "route": {"final": "proxy"},
     }
 
-
-    with tempfile.TemporaryDirectory() as tmp:
-
-        config_file = Path(tmp) / "config.json"
-
-        config_file.write_text(
+    with tempfile.TemporaryDirectory(prefix="vless-check-") as tmp:
+        config_path = Path(tmp) / "config.json"
+        config_path.write_text(
             json.dumps(config),
-            encoding="utf-8"
+            encoding="utf-8",
         )
 
-
         try:
-
             check = subprocess.run(
-
-                [
-                    SING_BOX,
-                    "check",
-                    "-c",
-                    str(config_file)
-                ],
-
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5
-
+                [SING_BOX, "check", "-c", str(config_path)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
             )
-
 
             if check.returncode != 0:
-
+                message = (check.stderr or check.stdout).strip()
+                print(
+                    "[DEBUG] sing-box config check failed: "
+                    + (message[:400] or "no diagnostic output")
+                )
                 return False
 
+            with open(os.devnull, "w") as devnull:
+                proc = subprocess.Popen(
+                    [SING_BOX, "run", "-c", str(config_path)],
+                    stdout=devnull,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
 
+                try:
+                    deadline = time.monotonic() + 8
+                    ready = False
 
-            proc = subprocess.Popen(
+                    while time.monotonic() < deadline:
+                        if proc.poll() is not None:
+                            message = (
+                                proc.stderr.read()
+                                if proc.stderr
+                                else ""
+                            )
+                            print(
+                                "[DEBUG] sing-box exited early: "
+                                + (message.strip()[:400] or "no error output")
+                            )
+                            return False
 
-                [
-                    SING_BOX,
-                    "run",
-                    "-c",
-                    str(config_file)
-                ],
+                        try:
+                            with socket.create_connection(
+                                ("127.0.0.1", port),
+                                timeout=0.5,
+                            ):
+                                ready = True
+                                break
+                        except OSError:
+                            time.sleep(0.2)
 
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                    if not ready:
+                        print("[DEBUG] SOCKS listener did not start.")
+                        return False
 
-            )
+                    result = subprocess.run(
+                        [
+                            "curl",
+                            "--silent",
+                            "--show-error",
+                            "--fail",
+                            "--max-time",
+                            str(TEST_TIMEOUT),
+                            "--proxy",
+                            f"socks5h://127.0.0.1:{port}",
+                            HTTP_TEST_URL,
+                            "--output",
+                            os.devnull,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=TEST_TIMEOUT + 3,
+                        check=False,
+                    )
 
+                    if result.returncode != 0:
+                        message = (
+                            result.stderr.strip()
+                            or f"curl exit code {result.returncode}"
+                        )
+                        print(
+                            "[DEBUG] HTTP connectivity test failed: "
+                            + message[:300]
+                        )
+                        return False
 
-            time.sleep(2)
+                    return True
 
+                finally:
+                    if proc.poll() is None:
+                        proc.terminate()
 
-            result = subprocess.run(
+                        try:
+                            proc.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait(timeout=2)
 
-                [
-                    "curl",
-                    "--fail",
-                    "--silent",
-                    "--max-time",
-                    str(TEST_TIMEOUT),
-                    "--proxy",
-                    f"socks5h://127.0.0.1:{port}",
-                    HTTP_TEST_URL
-
-                ],
-
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-
-            )
-
-
-            proc.terminate()
-
-
-            return result.returncode == 0
-
-
-
-        except Exception:
-
+        except subprocess.TimeoutExpired:
+            print("[DEBUG] A subprocess timed out.")
+            return False
+        except OSError as exc:
+            print(f"[DEBUG] Could not run test: {type(exc).__name__}")
             return False
 
 
-
-def main():
-
+def main() -> None:
     if not shutil.which(SING_BOX):
+        raise SystemExit("sing-box binary not found in PATH")
 
-        raise SystemExit(
-            "sing-box not found"
-        )
-
+    if not shutil.which("curl"):
+        raise SystemExit("curl binary not found in PATH")
 
     candidates = collect_uris()
+    working: list[str] = []
 
-
-    working = []
-
-
-    for index, uri in enumerate(
-        candidates,
-        start=1
-    ):
-
-        ok = test_uri(uri)
-
+    for index, uri in enumerate(candidates, start=1):
+        passed = test_uri(uri)
 
         print(
             f"[INFO] Tested {index}/{len(candidates)}: "
-            f"{'PASS' if ok else 'FAIL'}"
+            f"{'PASS' if passed else 'FAIL'}"
         )
 
-
-        if ok:
-
+        if passed:
             working.append(uri)
 
-
-
     OUTPUT.write_text(
-
-        "\n".join(working)
-        +
-        ("\n" if working else ""),
-
-        encoding="utf-8"
-
+        "\n".join(working) + ("\n" if working else ""),
+        encoding="utf-8",
     )
-
 
     print(
-        f"[INFO] Wrote {len(working)} working profile(s)."
+        f"[INFO] Wrote {len(working)} working profile(s) "
+        f"to {OUTPUT}."
     )
-
 
 
 if __name__ == "__main__":
-
     main()
