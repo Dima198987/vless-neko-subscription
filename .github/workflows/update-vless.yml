@@ -1,15 +1,15 @@
-name: Scrape and Update VLESS Configs
+name: Aggregate and Update VLESS Configs
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 */6 * * *' # Каждые 6 часов
 
 permissions:
   contents: write
 
 jobs:
-  scrape-vless:
+  aggregate-vless:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -23,10 +23,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Устанавливаем curl_cffi для обхода базовой защиты Cloudflare
-          pip install curl_cffi
+          pip install requests
 
-      - name: Run scraper script
+      - name: Run aggregator script
         run: python scraper.py
 
       - name: Commit and push if changed
@@ -40,6 +39,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "Нет изменений для коммита."
           else
-            git commit -m "chore: обновлены конфигурации VLESS"
+            git commit -m "chore: обновлены агрегированные конфигурации VLESS"
             git push
           fi
