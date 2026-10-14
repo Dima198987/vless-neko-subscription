@@ -1,11 +1,17 @@
 import re
 import socket
-import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-URL = "https://outlinekeys.com/"
+try:
+    from curl_cffi import requests
+    USE_CURL_CFFI = True
+except ImportError:
+    import requests
+    USE_CURL_CFFI = False
+
+URL = "https://outlinekeys.com/protocols/vless/"
 OUTPUT_FILE = "vless_configs.txt"
-TIMEOUT = 3  # Таймаут на проверку одного сервера в секундах
+TIMEOUT = 3
 
 def check_vless_working(config):
     """Базовая проверка доступности хоста и порта по TCP."""
@@ -16,12 +22,10 @@ def check_vless_working(config):
             return False
         
         host_info = parts[1]
-        # Извлекаем host:port (всё до первого /, ? или #)
         host_port = re.split(r'[/?#]', host_info)[0]
         if ':' not in host_port:
             return False
             
-        # Поддержка IPv6 [host]:port или обычного host:port
         if host_port.startswith('['):
             match = re.match(r'\[([^\]]+)\]:(\d+)', host_port)
             if not match:
@@ -34,7 +38,6 @@ def check_vless_working(config):
             
         port = int(port_str)
         
-        # Попытка установить TCP-соединение
         with socket.socket(family, socket.SOCK_STREAM) as s:
             s.settimeout(TIMEOUT)
             s.connect((host, port))
@@ -43,29 +46,40 @@ def check_vless_working(config):
         return False
 
 def main():
-    # ГАРАНТИЯ: Создаем файл сразу, чтобы git add не упал, даже если скрипт прервется
+    # Создаем файл сразу, чтобы git не падал
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write("# VLESS конфигурации с outlinekeys.com\n")
 
     print(f"Загрузка страницы {URL}...")
+    print(f"Используется эмуляция браузера: {'curl_cffi (Chrome)' if USE_CURL_CFFI else 'стандартный requests'}")
+    
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
-        }
-        response = requests.get(URL, headers=headers, timeout=15)
+        if USE_CURL_CFFI:
+            response = requests.get(URL, impersonate="chrome120", timeout=15)
+        else:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            }
+            response = requests.get(URL, headers=headers, timeout=15)
+            
+        print(f"Статус ответа: {response.status_code}")
+        
+        # Проверка на блокировку Cloudflare
+        if response.status_code == 403 or "cloudflare" in response.text.lower() or "checking your browser" in response.text.lower():
+            print("ОШИБКА: Сайт заблокировал запрос (Cloudflare или защита от ботов).")
+            print("Серверы GitHub Actions часто находятся в черных списках таких сайтов.")
+            with open(OUTPUT_FILE, 'a', encoding='utf-8') as f:
+                f.write("# ОШИБКА: Сайт заблокировал автоматический доступ\n")
+            return
+
         response.raise_for_status()
     except Exception as e:
-        print(f"Ошибка при загрузке страницы: {e}")
-        print("Возможно, сайт блокирует запросы из GitHub Actions (например, Cloudflare).")
-        print("Файл vless_configs.txt оставлен с базовым заголовком.")
+        print(f"Критическая ошибка при загрузке: {e}")
         return
 
-    # Поиск всех строк, начинающихся с vless://
     candidates = re.findall(r'vless://[^\s<>"\']+', response.text)
     
-    # Очистка и удаление дубликатов с сохранением порядка
     configs = []
     for c in candidates:
         c = c.rstrip('.,);]')
@@ -75,13 +89,12 @@ def main():
     print(f"Найдено {len(configs)} уникальных конфигураций VLESS.")
 
     if not configs:
-        print("Конфигурации не найдены. Возможно, сайт изменил структуру.")
+        print("Конфигурации не найдены. Возможно, сайт изменил верстку или отдает данные через JavaScript.")
         return
 
     print("Проверка доступности серверов (TCP)...")
     working_configs = []
     
-    # Параллельная проверка для ускорения процесса
     with ThreadPoolExecutor(max_workers=30) as executor:
         future_to_config = {executor.submit(check_vless_working, config): config for config in configs}
         for future in as_completed(future_to_config):
@@ -89,15 +102,11 @@ def main():
             try:
                 if future.result():
                     working_configs.append(config)
-                    print(f"[OK] {config[:50]}...")
-                else:
-                    print(f"[FAIL] {config[:50]}...")
-            except Exception as e:
-                print(f"[ERROR] {config[:50]}... : {e}")
+            except Exception:
+                pass
 
     print(f"\nУспешно проверено: {len(working_configs)} из {len(configs)}")
 
-    # Перезаписываем файл только рабочими конфигурациями
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         if working_configs:
             for config in working_configs:
