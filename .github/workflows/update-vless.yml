@@ -1,0 +1,37 @@
+name: Scrape and Update VLESS Configs
+
+on:
+  workflow_dispatch: # Позволяет запускать вручную из вкладки Actions
+  schedule:
+    - cron: '0 */6 * * *' # Автоматический запуск каждые 6 часов
+
+permissions:
+  contents: write # Разрешение на запись и коммит файлов в репозиторий
+
+jobs:
+  scrape-vless:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Run scraper script
+        run: python scraper.py
+
+      - name: Commit and push if changed
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add vless_configs.txt
+          # Коммитим только если есть изменения
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore: обновлены конфигурации VLESS" && git push)
