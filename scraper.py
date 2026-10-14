@@ -43,21 +43,29 @@ def check_vless_working(config):
         return False
 
 def main():
+    # ГАРАНТИЯ: Создаем файл сразу, чтобы git add не упал, даже если скрипт прервется
+    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+        f.write("# VLESS конфигурации с outlinekeys.com\n")
+
     print(f"Загрузка страницы {URL}...")
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
         }
         response = requests.get(URL, headers=headers, timeout=15)
         response.raise_for_status()
     except Exception as e:
         print(f"Ошибка при загрузке страницы: {e}")
+        print("Возможно, сайт блокирует запросы из GitHub Actions (например, Cloudflare).")
+        print("Файл vless_configs.txt оставлен с базовым заголовком.")
         return
 
-    # Поиск всех строк, начинающихся с vless:// и не содержащих пробелов или HTML-символов
+    # Поиск всех строк, начинающихся с vless://
     candidates = re.findall(r'vless://[^\s<>"\']+', response.text)
     
-    # Очистка от возможных конечных знаков препинания и удаление дубликатов с сохранением порядка
+    # Очистка и удаление дубликатов с сохранением порядка
     configs = []
     for c in candidates:
         c = c.rstrip('.,);]')
@@ -67,9 +75,7 @@ def main():
     print(f"Найдено {len(configs)} уникальных конфигураций VLESS.")
 
     if not configs:
-        print("Конфигурации не найдены. Возможно, сайт изменил структуру или заблокировал запрос.")
-        with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-            f.write("# Конфигурации не найдены или сайт недоступен\n")
+        print("Конфигурации не найдены. Возможно, сайт изменил структуру.")
         return
 
     print("Проверка доступности серверов (TCP)...")
@@ -91,10 +97,13 @@ def main():
 
     print(f"\nУспешно проверено: {len(working_configs)} из {len(configs)}")
 
-    # Сохранение рабочих конфигураций в файл
+    # Перезаписываем файл только рабочими конфигурациями
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        for config in working_configs:
-            f.write(config + '\n')
+        if working_configs:
+            for config in working_configs:
+                f.write(config + '\n')
+        else:
+            f.write("# Рабочих конфигураций не найдено\n")
             
     print(f"Результаты сохранены в {OUTPUT_FILE}")
 
