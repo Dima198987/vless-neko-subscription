@@ -1,12 +1,12 @@
 name: Scrape and Update VLESS Configs
 
 on:
-  workflow_dispatch: # Позволяет запускать вручную из вкладки Actions
+  workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *' # Автоматический запуск каждые 6 часов
+    - cron: '0 */6 * * *'
 
 permissions:
-  contents: write # Разрешение на запись и коммит файлов в репозиторий
+  contents: write
 
 jobs:
   scrape-vless:
@@ -23,7 +23,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          # Устанавливаем curl_cffi для обхода базовой защиты Cloudflare
+          pip install curl_cffi
 
       - name: Run scraper script
         run: python scraper.py
@@ -32,6 +33,13 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          touch vless_configs.txt
           git add vless_configs.txt
-          # Коммитим только если есть изменения
-          git diff --quiet && git diff --staged --quiet || (git commit -m "chore: обновлены конфигурации VLESS" && git push)
+          
+          if git diff --staged --quiet; then
+            echo "Нет изменений для коммита."
+          else
+            git commit -m "chore: обновлены конфигурации VLESS"
+            git push
+          fi
