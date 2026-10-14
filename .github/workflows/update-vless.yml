@@ -1,9 +1,9 @@
 name: Aggregate and Update VLESS Configs
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Ручной запуск из вкладки Actions
   schedule:
-    - cron: '0 */6 * * *' # Каждые 6 часов
+    - cron: '0 */2 * * *'  # Автоматический запуск каждые 2 часа
 
 permissions:
   contents: write
@@ -39,6 +39,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "Нет изменений для коммита."
           else
-            git commit -m "chore: обновлены агрегированные конфигурации VLESS"
+            git commit -m "chore: обновлены конфигурации VLESS"
             git push
           fi
