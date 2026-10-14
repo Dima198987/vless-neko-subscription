@@ -4,21 +4,19 @@ import base64
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Расширенный список проверенных источников.
-# Если какой-то источник перестанет работать — просто закомментируйте его.
+# ИСТОЧНИКИ:
+# 1. Прямые ссылки на GitHub (если они живы)
+# 2. Telegram-каналы через r.jina.ai (читает веб-версию канала и отдает чистый текст со всеми ссылками)
 SOURCE_URLS = [
-    # Агрегатор из Telegram-каналов (Base64)
-    "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/mix/base64",
-    # Агрегатор VLESS из Telegram (Base64)
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/vless",
-    # Общий агрегатор (Base64)
-    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/All_Configs_base64.txt",
-    # Агрегатор (Base64)
-    "https://raw.githubusercontent.com/sashalsk/V2Ray/main/V2Config_64base",
-    # Текстовый список
+    # Telegram каналы (через Jina AI Reader - самый надежный способ)
+    "https://r.jina.ai/https://t.me/s/v2ray_configs_pool",
+    "https://r.jina.ai/https://t.me/s/ConfigV2rayNG",
+    "https://r.jina.ai/https://t.me/s/vless_vpn",
+    
+    # GitHub репозитории (актуальные на текущий момент)
     "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/list/00.txt",
-    # Еще один агрегатор (Base64)
-    "https://raw.githubusercontent.com/MrPooyaX/VpnsFucking/main/Shenzo-IP.txt",
+    "https://raw.githubusercontent.com/Leon406/SubCrawler/main/sub/share/all",
+    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/Config.txt",
 ]
 
 OUTPUT_FILE = "vless_configs.txt"
@@ -57,71 +55,52 @@ def check_vless_working(config):
         return False
 
 def try_decode_base64(text):
-    """Пытается декодировать текст из Base64 несколькими способами."""
-    # Способ 1: Очистка от всех пробелов и переносов
+    """Пытается декодировать текст из Base64."""
     clean = re.sub(r'\s+', '', text)
     try:
         decoded = base64.b64decode(clean, validate=False)
-        # Проверяем, что результат читаемый (много печатных символов)
-        decoded_text = decoded.decode('utf-8', errors='ignore')
-        if 'vless://' in decoded_text or 'vmess://' in decoded_text or '://' in decoded_text:
-            return decoded_text
+        return decoded.decode('utf-8', errors='ignore')
     except Exception:
-        pass
-    
-    # Способ 2: Декодирование построчно
-    lines = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            decoded = base64.b64decode(line, validate=False).decode('utf-8', errors='ignore')
-            lines.append(decoded)
-        except Exception:
-            lines.append(line)
-    return '\n'.join(lines)
+        return text
 
 def fetch_and_extract(url):
-    """Скачивает файл, декодирует и извлекает vless:// ссылки."""
+    """Скачивает файл, извлекает vless:// ссылки."""
     configs = []
-    raw_text = ""
     try:
         print(f"[INFO] Загрузка: {url}")
-        response = requests.get(url, timeout=20, headers={
+        # Увеличиваем таймаут для Jina AI, так как парсинг Telegram может занять 2-3 секунды
+        response = requests.get(url, timeout=30, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
-        print(f"[INFO] Статус ответа: {response.status_code}, Размер: {len(response.text)} байт")
+        print(f"[INFO] Статус: {response.status_code}, Размер: {len(response.text)} байт")
         
         if response.status_code != 200:
             print(f"[WARN] Источник вернул код {response.status_code}")
             return configs
             
-        raw_text = response.text
+        text = response.text
         
-        # Если в исходном тексте уже есть vless:// — работаем с ним напрямую
-        if 'vless://' in raw_text:
-            print("[INFO] Найден прямой текст с vless:// ссылками")
-            text = raw_text
-        else:
-            # Пытаемся декодировать Base64
-            print("[INFO] Попытка декодирования Base64...")
-            text = try_decode_base64(raw_text)
-            if 'vless://' in text:
-                print("[INFO] Base64 успешно декодирован, найдены vless:// ссылки")
-            else:
-                print("[WARN] После декодирования vless:// ссылки не найдены")
-        
-        # Извлекаем все vless:// ссылки
+        # Если это не Jina AI, пробуем декодировать Base64
+        if "jina.ai" not in url:
+            text = try_decode_base64(text)
+            
+        # Ищем vless://
         found = re.findall(r'vless://[^\s<>"\']+', text)
+        
+        # ДИАГНОСТИКА: Если не нашли vless, покажем, что там есть на самом деле
+        if not found and len(text) > 50:
+            other_protocols = re.findall(r'(vmess|trojan|ss|tuic|hysteria)://[^\s<>"\']+', text)
+            print(f"[WARN] vless:// не найден. Найдены другие протоколы: {set(other_protocols)}")
+            print(f"[DEBUG] Фрагмент текста: {text[:150].replace(chr(10), ' ')}...")
+            
         for c in found:
             c = c.rstrip('.,);]')
             if c not in configs:
                 configs.append(c)
                 
-        print(f"[INFO] Итог по источнику: найдено {len(configs)} уникальных vless:// ссылок")
+        print(f"[INFO] Найдено уникальных vless:// ссылок: {len(configs)}")
     except Exception as e:
-        print(f"[ERROR] Ошибка при обработке {url}: {type(e).__name__}: {e}")
+        print(f"[ERROR] Ошибка {url}: {type(e).__name__}: {e}")
         
     return configs
 
@@ -130,6 +109,10 @@ def main():
     print("НАЧАЛО СБОРА КОНФИГУРАЦИЙ VLESS")
     print("=" * 60)
     
+    # Гарантируем создание файла
+    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+        f.write("# VLESS конфигурации\n")
+
     all_configs = []
     source_stats = []
     
@@ -148,22 +131,13 @@ def main():
     print("СТАТИСТИКА ПО ИСТОЧНИКАМ:")
     for url, count in source_stats:
         print(f"  {count:4d} ссылок <- {url}")
-    print(f"ВСЕГО УНИКАЛЬНЫХ: {len(final_configs)}")
+    print(f"ВСЕГО УНИКАЛЬНЫХ VLESS: {len(final_configs)}")
     print("=" * 60)
 
-    # Если ничего не нашли — сохраняем диагностический файл
     if not final_configs:
-        print("\n[CRITICAL] Ни один источник не вернул vless:// ссылок!")
-        print("Возможные причины:")
-        print("  - Источники изменили формат или стали недоступны")
-        print("  - GitHub Actions блокирует исходящие запросы")
-        print("  - Все источники используют формат, отличный от vless://")
-        
+        print("\n[CRITICAL] Не найдено ни одной ссылки vless://")
         with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-            f.write("# ОШИБКА СБОРА\n")
-            f.write("# Не удалось получить ни одной vless:// конфигурации.\n")
-            f.write("# Проверьте логи GitHub Actions для диагностики.\n")
-            f.write(f"# Источников в списке: {len(SOURCE_URLS)}\n")
+            f.write("# ОШИБКА: Источники не содержат vless:// конфигураций\n")
         return
 
     # Проверка доступности (TCP)
@@ -180,7 +154,7 @@ def main():
             except Exception:
                 pass
 
-    print(f"Успешно проверено: {len(working_configs)} из {len(final_configs)}")
+    print(f"Успешно прошло TCP-проверку: {len(working_configs)} из {len(final_configs)}")
 
     # Сохранение результата
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
@@ -189,15 +163,12 @@ def main():
                 f.write(config + '\n')
             print(f"Сохранено {len(working_configs)} РАБОЧИХ конфигураций.")
         else:
-            # Если TCP-проверка ничего не прошла (частая проблема GitHub Actions) —
-            # сохраняем ВСЕ найденные конфиги, чтобы файл не был пустым
-            print("[WARN] TCP-проверка не нашла рабочих серверов.")
-            print("Это часто случается из-за сетевых ограничений GitHub Actions.")
+            print("[WARN] TCP-проверка не прошла ни один сервер (ограничения сети GitHub).")
             print("Сохраняем ВСЕ найденные конфигурации без проверки.")
             for config in final_configs:
                 f.write(config + '\n')
             
-    print(f"\nФайл {OUTPUT_FILE} успешно сохранен.")
+    print(f"\nФайл {OUTPUT_FILE} успешно обновлен.")
 
 if __name__ == "__main__":
     main()
