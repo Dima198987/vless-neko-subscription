@@ -4,23 +4,31 @@ import base64
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ИСТОЧНИКИ:
-# 1. Прямые ссылки на GitHub (если они живы)
-# 2. Telegram-каналы через r.jina.ai (читает веб-версию канала и отдает чистый текст со всеми ссылками)
+# ИСТОЧНИКИ: Telegram-каналы через Jina AI + проверенные GitHub-репозитории
 SOURCE_URLS = [
-    # Telegram каналы (через Jina AI Reader - самый надежный способ)
     "https://r.jina.ai/https://t.me/s/v2ray_configs_pool",
     "https://r.jina.ai/https://t.me/s/ConfigV2rayNG",
     "https://r.jina.ai/https://t.me/s/vless_vpn",
-    
-    # GitHub репозитории (актуальные на текущий момент)
+    "https://r.jina.ai/https://t.me/s/OutlineVpnOfficial",
     "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/list/00.txt",
     "https://raw.githubusercontent.com/Leon406/SubCrawler/main/sub/share/all",
-    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/Config.txt",
 ]
 
 OUTPUT_FILE = "vless_configs.txt"
 TIMEOUT = 3
+
+def get_dedup_key(config):
+    """
+    Создает уникальный ключ для конфигурации, игнорируя название (remark) после # 
+    и регистр букв. Это позволяет отсеивать дубликаты одного и того же сервера 
+    с разными названиями (например, "🇩🇪 Server" и "Germany").
+    """
+    config = config.strip()
+    if '#' in config:
+        base_part = config.split('#')[0]
+    else:
+        base_part = config
+    return base_part.lower()
 
 def check_vless_working(config):
     """Базовая проверка доступности хоста и порта по TCP."""
@@ -68,11 +76,9 @@ def fetch_and_extract(url):
     configs = []
     try:
         print(f"[INFO] Загрузка: {url}")
-        # Увеличиваем таймаут для Jina AI, так как парсинг Telegram может занять 2-3 секунды
         response = requests.get(url, timeout=30, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
-        print(f"[INFO] Статус: {response.status_code}, Размер: {len(response.text)} байт")
         
         if response.status_code != 200:
             print(f"[WARN] Источник вернул код {response.status_code}")
@@ -80,25 +86,17 @@ def fetch_and_extract(url):
             
         text = response.text
         
-        # Если это не Jina AI, пробуем декодировать Base64
         if "jina.ai" not in url:
             text = try_decode_base64(text)
             
-        # Ищем vless://
         found = re.findall(r'vless://[^\s<>"\']+', text)
         
-        # ДИАГНОСТИКА: Если не нашли vless, покажем, что там есть на самом деле
-        if not found and len(text) > 50:
-            other_protocols = re.findall(r'(vmess|trojan|ss|tuic|hysteria)://[^\s<>"\']+', text)
-            print(f"[WARN] vless:// не найден. Найдены другие протоколы: {set(other_protocols)}")
-            print(f"[DEBUG] Фрагмент текста: {text[:150].replace(chr(10), ' ')}...")
-            
         for c in found:
             c = c.rstrip('.,);]')
-            if c not in configs:
+            if c:
                 configs.append(c)
                 
-        print(f"[INFO] Найдено уникальных vless:// ссылок: {len(configs)}")
+        print(f"[INFO] Сырых ссылок найдено: {len(configs)}")
     except Exception as e:
         print(f"[ERROR] Ошибка {url}: {type(e).__name__}: {e}")
         
@@ -106,10 +104,9 @@ def fetch_and_extract(url):
 
 def main():
     print("=" * 60)
-    print("НАЧАЛО СБОРА КОНФИГУРАЦИЙ VLESS")
+    print("НАЧАЛО СБОРА И ОЧИСТКИ КОНФИГУРАЦИЙ VLESS")
     print("=" * 60)
     
-    # Гарантируем создание файла
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write("# VLESS конфигурации\n")
 
@@ -121,17 +118,24 @@ def main():
         source_stats.append((url, len(configs)))
         all_configs.extend(configs)
         
-    # Глобальная дедупликация
-    final_configs = []
-    for c in all_configs:
-        if c not in final_configs:
-            final_configs.append(c)
-            
     print("\n" + "=" * 60)
-    print("СТАТИСТИКА ПО ИСТОЧНИКАМ:")
-    for url, count in source_stats:
-        print(f"  {count:4d} ссылок <- {url}")
-    print(f"ВСЕГО УНИКАЛЬНЫХ VLESS: {len(final_configs)}")
+    print("ДЕДУПЛИКАЦИЯ (удаление одинаковых серверов с разными названиями)...")
+    
+    seen_keys = set()
+    final_configs = []
+    duplicates_removed = 0
+    
+    for c in all_configs:
+        key = get_dedup_key(c)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            final_configs.append(c)
+        else:
+            duplicates_removed += 1
+            
+    print(f"Всего собрано сырых ссылок: {len(all_configs)}")
+    print(f"Удалено дубликатов: {duplicates_removed}")
+    print(f"Осталось уникальных профилей: {len(final_configs)}")
     print("=" * 60)
 
     if not final_configs:
@@ -161,14 +165,14 @@ def main():
         if working_configs:
             for config in working_configs:
                 f.write(config + '\n')
-            print(f"Сохранено {len(working_configs)} РАБОЧИХ конфигураций.")
+            print(f"✅ Сохранено {len(working_configs)} РАБОЧИХ уникальных конфигураций.")
         else:
             print("[WARN] TCP-проверка не прошла ни один сервер (ограничения сети GitHub).")
-            print("Сохраняем ВСЕ найденные конфигурации без проверки.")
+            print("💡 Сохраняем ВСЕ уникальные конфигурации без проверки (вы сможете проверить их в NekoBox).")
             for config in final_configs:
                 f.write(config + '\n')
             
-    print(f"\nФайл {OUTPUT_FILE} успешно обновлен.")
+    print(f"\n🎉 Файл {OUTPUT_FILE} успешно обновлен!")
 
 if __name__ == "__main__":
     main()
