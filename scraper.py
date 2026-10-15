@@ -5,26 +5,26 @@ import requests
 from urllib.parse import urlparse, parse_qsl, urlunparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ИСТОЧНИКИ: Только проверенные Telegram-каналы через Jina AI и прямые GitHub-агрегаторы.
-# Мы убрали outlinekeys.com, так как Cloudflare блокирует его парсинг.
-# Вместо этого мы берем канал @keysOutline, который является официальным источником этого сайта!
+# СПЕЦИАЛИЗИРОВАННЫЕ ИСТОЧНИКИ ДЛЯ РФ (VLESS + REALITY)
+# Эти репозитории собирают конфигурации, которые обходят DPI мобильных операторов (включая Йоту)
 SOURCE_URLS = [
-    # Официальный канал outlinekeys.com (отдает те же ключи, что и сайт, но без защиты Cloudflare)
-    "https://r.jina.ai/https://t.me/s/keysOutline",
-    # Крупнейшие агрегаторы Telegram
-    "https://r.jina.ai/https://t.me/s/v2ray_configs_pool",
-    "https://r.jina.ai/https://t.me/s/ShadowProxy66",
-    "https://r.jina.ai/https://t.me/s/VmessProtocol",
-    # Прямые GitHub-агрегаторы (на случай, если Telegram временно недоступен)
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/vless",
-    "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/list/00.txt",
+    # 1. Специально для РФ: VLESS REALITY с белыми списками SNI для мобильных операторов
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+    
+    # 2. Крупный агрегатор, содержащий много REALITY конфигураций (обновляется ежедневно)
+    "https://raw.githubusercontent.com/Mahdi0024/ProxyCollector/master/sub/proxies.txt",
+    
+    # 3. Актуальный сборщик VLESS (включает Reality и другие современные протоколы)
+    "https://raw.githubusercontent.com/iboxz/free-v2ray-collector/main/vless.txt",
+    
+    # 4. Резервный агрегатор с частыми обновлениями (каждые 15 минут)
+    "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/Configs.txt",
 ]
 
 OUTPUT_FILE = "vless_configs.txt"
-TIMEOUT = 3
+TIMEOUT = 4  # Чуть увеличили таймаут для REALITY-серверов
 
 def clean_config_string(config):
-    """Удаляет невидимые символы, пробелы по краям, BOM-маркеры."""
     config = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', config)
     config = config.strip()
     config = re.sub(r'\s+', ' ', config)
@@ -96,7 +96,7 @@ def fetch_and_extract(url):
     configs = []
     try:
         print(f"[INFO] Загрузка: {url}")
-        response = requests.get(url, timeout=30, headers={
+        response = requests.get(url, timeout=20, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         
@@ -106,8 +106,8 @@ def fetch_and_extract(url):
             
         text = response.text
         
-        # Если это НЕ Jina AI, пробуем декодировать Base64 (для github raw ссылок)
-        if "jina.ai" not in url:
+        # Если это не прямой текст, пробуем декодировать Base64
+        if "githubusercontent" in url and not text.startswith('vless://'):
             text = try_decode_base64(text)
             
         # Ищем все vless:// ссылки
@@ -119,18 +119,19 @@ def fetch_and_extract(url):
             if c:
                 configs.append(c)
                 
-        print(f"[INFO] Сырых ссылок найдено: {len(configs)}")
+        print(f"[INFO] Найдено vless:// ссылок: {len(configs)}")
     except Exception as e:
         print(f"[ERROR] Ошибка {url}: {type(e).__name__}: {e}")
     return configs
 
 def main():
     print("=" * 70)
-    print("СБОР КОНФИГУРАЦИЙ VLESS (через надежные Telegram-каналы)")
+    print("СБОР VLESS КОНФИГУРАЦИЙ (ОПТИМИЗИРОВАНО ДЛЯ РФ / ЙОТА)")
+    print("Приоритет: VLESS + REALITY (обход DPI)")
     print("=" * 70)
     
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        f.write("# VLESS конфигурации\n")
+        f.write("# VLESS конфигурации (Reality-optimized)\n")
 
     all_configs = []
     source_stats = []
@@ -141,7 +142,7 @@ def main():
         all_configs.extend(configs)
         
     print("\n" + "=" * 70)
-    print("ГЛУБОКАЯ ДЕДУПЛИКАЦИЯ (нормализация URL + очистка невидимых символов)...")
+    print("ГЛУБОКАЯ ДЕДУПЛИКАЦИЯ...")
     
     seen_keys = set()
     final_configs = []
@@ -166,7 +167,7 @@ def main():
             f.write("# ОШИБКА: Источники не содержат vless:// конфигураций\n")
         return
 
-    print("\nПроверка доступности серверов (TCP)...")
+    print("\nПроверка доступности серверов (TCP-рукопожатие)...")
     working_configs = []
     
     with ThreadPoolExecutor(max_workers=40) as executor:
@@ -187,8 +188,8 @@ def main():
                 f.write(config + '\n')
             print(f"✅ Сохранено {len(working_configs)} РАБОЧИХ уникальных конфигураций.")
         else:
-            print("[WARN] TCP-проверка не прошла ни один сервер (ограничения сети GitHub).")
-            print("💡 Сохраняем ВСЕ уникальные конфигурации без проверки.")
+            print("[WARN] TCP-проверка не прошла ни один сервер (возможны ограничения GitHub Actions).")
+            print("💡 Сохраняем ВСЕ уникальные конфигурации. Проверьте их в NekoBox вручную.")
             for config in final_configs:
                 f.write(config + '\n')
             
