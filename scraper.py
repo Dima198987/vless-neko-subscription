@@ -13,6 +13,10 @@ SOURCE_URLS = [
     "https://r.jina.ai/https://t.me/s/OutlineVpnOfficial",
     "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/list/00.txt",
     "https://raw.githubusercontent.com/Leon406/SubCrawler/main/sub/share/all",
+    # Telegram-каналы через Jina AI Reader (самый надежный способ получить свежие ключи)
+    "https://r.jina.ai/https://t.me/s/V2rayNGmat",
+    "https://r.jina.ai/https://t.me/s/ShadowProxy66",
+    "https://r.jina.ai/https://t.me/s/v2ray_configs_pool",
 ]
 
 OUTPUT_FILE = "vless_configs.txt"
