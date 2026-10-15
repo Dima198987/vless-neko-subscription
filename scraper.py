@@ -5,43 +5,41 @@ import requests
 from urllib.parse import urlparse, parse_qsl, urlunparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ИСТОЧНИКИ
+# ИСТОЧНИКИ: Только проверенные Telegram-каналы через Jina AI и прямые GitHub-агрегаторы.
+# Мы убрали outlinekeys.com, так как Cloudflare блокирует его парсинг.
+# Вместо этого мы берем канал @keysOutline, который является официальным источником этого сайта!
 SOURCE_URLS = [
+    # Официальный канал outlinekeys.com (отдает те же ключи, что и сайт, но без защиты Cloudflare)
+    "https://r.jina.ai/https://t.me/s/keysOutline",
+    # Крупнейшие агрегаторы Telegram
     "https://r.jina.ai/https://t.me/s/v2ray_configs_pool",
-    "https://r.jina.ai/https://t.me/s/ConfigV2rayNG",
-    "https://r.jina.ai/https://t.me/s/vless_vpn",
-    "https://r.jina.ai/https://t.me/s/OutlineVpnOfficial",
-    "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/list/00.txt",
-    "https://raw.githubusercontent.com/Leon406/SubCrawler/main/sub/share/all",
-    # Telegram-каналы через Jina AI Reader (самый надежный способ получить свежие ключи)
-    "https://r.jina.ai/https://t.me/s/V2rayNGmat",
     "https://r.jina.ai/https://t.me/s/ShadowProxy66",
-    "https://r.jina.ai/https://t.me/s/v2ray_configs_pool",
+    "https://r.jina.ai/https://t.me/s/VmessProtocol",
+    # Прямые GitHub-агрегаторы (на случай, если Telegram временно недоступен)
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/vless",
+    "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/list/00.txt",
 ]
 
 OUTPUT_FILE = "vless_configs.txt"
 TIMEOUT = 3
 
+def clean_config_string(config):
+    """Удаляет невидимые символы, пробелы по краям, BOM-маркеры."""
+    config = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', config)
+    config = config.strip()
+    config = re.sub(r'\s+', ' ', config)
+    return config
+
 def get_canonical_key(config):
-    """
-    Превращает конфигурацию в канонический (эталонный) вид для идеального поиска дубликатов.
-    1. Убирает пробелы по краям.
-    2. Парсит URL.
-    3. Сортирует параметры запроса (чтобы ?a=1&b=2 и ?b=2&a=1 стали одинаковыми).
-    4. Удаляет фрагмент (название после #).
-    5. Приводит к нижнему регистру.
-    """
+    """Канонический вид для поиска дубликатов (игнорирует название после #)."""
     try:
-        config = config.strip()
+        config = clean_config_string(config)
         if not config.startswith('vless://'):
             return config
             
         parsed = urlparse(config)
-        
-        # Сортируем параметры: parse_qsl разбивает на пары, sorted сортирует по ключу
         sorted_query = '&'.join(f"{k}={v}" for k, v in sorted(parse_qsl(parsed.query)))
         
-        # Собираем URL обратно БЕЗ фрагмента (последний аргумент - пустая строка)
         canonical = urlunparse((
             parsed.scheme,
             parsed.netloc,
@@ -52,8 +50,7 @@ def get_canonical_key(config):
         ))
         return canonical.lower()
     except Exception:
-        # Если парсинг не удался, используем запасной простой метод
-        return config.split('#')[0].strip().lower()
+        return clean_config_string(config).split('#')[0].lower()
 
 def check_vless_working(config):
     """Базовая проверка доступности хоста и порта по TCP."""
@@ -108,12 +105,17 @@ def fetch_and_extract(url):
             return configs
             
         text = response.text
+        
+        # Если это НЕ Jina AI, пробуем декодировать Base64 (для github raw ссылок)
         if "jina.ai" not in url:
             text = try_decode_base64(text)
             
+        # Ищем все vless:// ссылки
         found = re.findall(r'vless://[^\s<>"\']+', text)
+        
         for c in found:
             c = c.rstrip('.,);]')
+            c = clean_config_string(c)
             if c:
                 configs.append(c)
                 
@@ -123,19 +125,23 @@ def fetch_and_extract(url):
     return configs
 
 def main():
-    print("=" * 60)
-    print("СБОР И ГЛУБОКАЯ ОЧИСТКА КОНФИГУРАЦИЙ VLESS")
-    print("=" * 60)
+    print("=" * 70)
+    print("СБОР КОНФИГУРАЦИЙ VLESS (через надежные Telegram-каналы)")
+    print("=" * 70)
     
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write("# VLESS конфигурации\n")
 
     all_configs = []
+    source_stats = []
+    
     for url in SOURCE_URLS:
-        all_configs.extend(fetch_and_extract(url))
+        configs = fetch_and_extract(url)
+        source_stats.append((url, len(configs)))
+        all_configs.extend(configs)
         
-    print("\n" + "=" * 60)
-    print("ГЛУБОКАЯ ДЕДУПЛИКАЦИЯ (нормализация URL + сортировка параметров)...")
+    print("\n" + "=" * 70)
+    print("ГЛУБОКАЯ ДЕДУПЛИКАЦИЯ (нормализация URL + очистка невидимых символов)...")
     
     seen_keys = set()
     final_configs = []
@@ -145,14 +151,14 @@ def main():
         key = get_canonical_key(c)
         if key not in seen_keys:
             seen_keys.add(key)
-            final_configs.append(c) # Сохраняем оригинальную строку с красивым названием
+            final_configs.append(c)
         else:
             duplicates_removed += 1
             
     print(f"Всего собрано сырых ссылок: {len(all_configs)}")
-    print(f"Удалено точных и скрытых дубликатов: {duplicates_removed}")
+    print(f"Удалено дубликатов: {duplicates_removed}")
     print(f"Осталось уникальных профилей: {len(final_configs)}")
-    print("=" * 60)
+    print("=" * 70)
 
     if not final_configs:
         print("\n[CRITICAL] Не найдено ни одной ссылки vless://")
