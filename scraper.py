@@ -111,7 +111,8 @@ def fetch_and_extract(url):
             text = try_decode_base64(text)
             
         # Ищем все vless:// ссылки
-        found = re.findall(r'vless://[^\s<>"\']+', text)
+        # found = re.findall(r'vless://[^\s<>"\']+', text)
+        found = re.findall(r'(?:vless|vmess|trojan|hysteria2|ss)://[^\s<>"\']+', text)
         
         for c in found:
             c = c.rstrip('.,);]')
