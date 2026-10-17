@@ -20,17 +20,8 @@ SOURCE_URLS = [
     # 4. Резервный агрегатор с частыми обновлениями (каждые 15 минут)
     "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/Configs.txt",
 
-        # 5. Очень активный агрегатор, обновляется каждые 15 минут (содержит много Reality)
-    "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/All_Configs_base64.txt",
-    
-    # 6. Специализированный сборщик именно VLESS и Reality конфигураций (обновление каждые 2 часа)
-    "https://raw.githubusercontent.com/NiREvil/vless/main/sub/hiddify",
-    
-    # 7. Крупный проект по сбору конфигов из Telegram-каналов (отфильтрованный и проверенный список)
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/vless",
-    
-    # 8. Еще один стабильный агрегатор с автоматической проверкой работоспособности перед публикацией
-    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_base64.txt",
+        # ЭТОТ источник работает и обновляется каждые 5 минут!
+"https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/Splitted-By-Protocol/vless.txt",
 ]
 
 OUTPUT_FILE = "vless_configs.txt"
