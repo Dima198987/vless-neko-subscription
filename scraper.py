@@ -1,17 +1,26 @@
 import re
 import socket
-import ssl
 import base64
 import requests
-from urllib.parse import urlparse, parse_qsl, urlunparse, parse_qs
+from urllib.parse import urlparse, parse_qsl, urlunparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ИСТОЧНИКИ
+# ИСТОЧНИКИ: Telegram-каналы через Jina AI (обходит любые блокировки) + надежные GitHub-агрегаторы
 SOURCE_URLS = [
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+    # 1. Самый крупный и активный канал с конфигами для v2rayNG (много Reality)
+    "https://r.jina.ai/https://t.me/s/v2ray_configs_pool",
+    
+    # 2. Канал, ориентированный именно на пользователей из РФ (тестируют обход DPI)
+    "https://r.jina.ai/https://t.me/s/V2rayNGmat",
+    
+    # 3. Очень активный канал с большим объемом VLESS и Trojan конфигов
+    "https://r.jina.ai/https://t.me/s/ShadowProxy66",
+    
+    # 4. Официальный канал того самого сайта outlinekeys.com (дублирует их ключи в текстовом виде)
+    "https://r.jina.ai/https://t.me/s/OutlineVpnOfficial",
+    
+    # 5. Резервный GitHub-агрегатор, который собирает данные из Telegram и выдает чистый список
     "https://raw.githubusercontent.com/Mahdi0024/ProxyCollector/master/sub/proxies.txt",
-    "https://raw.githubusercontent.com/iboxz/free-v2ray-collector/main/vless.txt",
-    "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/Configs.txt",
 ]
 
 OUTPUT_FILE = "vless_configs.txt"
@@ -24,6 +33,7 @@ def clean_config_string(config):
     return config
 
 def get_canonical_key(config):
+    """Канонический вид для поиска дубликатов (игнорирует название после #)."""
     try:
         config = clean_config_string(config)
         if not config.startswith('vless://'):
@@ -38,127 +48,44 @@ def get_canonical_key(config):
     except Exception:
         return clean_config_string(config).split('#')[0].lower()
 
-def parse_vless_config(config):
-    """Парсит VLESS-конфиг и извлекает ключевые параметры."""
+def check_vless_working(config):
+    """Простая и быстрая TCP-проверка доступности хоста и порта."""
     try:
-        clean = config.replace('vless://', '')
-        if '@' not in clean:
-            return None
+        clean_config = config.replace('vless://', '')
+        parts = clean_config.split('@')
+        if len(parts) != 2:
+            return False
         
-        uuid, rest = clean.split('@', 1)
-        
-        # Извлекаем host:port
-        host_port = re.split(r'[/?#]', rest)[0]
+        host_info = parts[1]
+        host_port = re.split(r'[/?#]', host_info)[0]
         if ':' not in host_port:
-            return None
-        
+            return False
+            
         if host_port.startswith('['):
             match = re.match(r'\[([^\]]+)\]:(\d+)', host_port)
             if not match:
-                return None
-            host, port = match.groups()
+                return False
+            host, port_str = match.groups()
+            family = socket.AF_INET6
         else:
-            host, port = host_port.rsplit(':', 1)
+            host, port_str = host_port.rsplit(':', 1)
+            family = socket.AF_INET
+            
+        port = int(port_str)
         
-        # Парсим параметры
-        params = {}
-        if '?' in rest:
-            query = rest.split('?')[1].split('#')[0]
-            params = parse_qs(query)
-        
-        return {
-            'uuid': uuid,
-            'host': host,
-            'port': int(port),
-            'security': params.get('security', [''])[0],
-            'flow': params.get('flow', [''])[0],
-            'type': params.get('type', ['tcp'])[0],
-            'sni': params.get('sni', [host])[0],
-            'path': params.get('path', ['/'])[0],
-        }
-    except Exception:
-        return None
-
-def check_tcp(host, port, timeout=TIMEOUT):
-    """Уровень 1: Проверка TCP-подключения."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(timeout)
+        with socket.socket(family, socket.SOCK_STREAM) as s:
+            s.settimeout(TIMEOUT)
             s.connect((host, port))
             return True
     except Exception:
         return False
 
-def check_tls(host, port, sni, timeout=TIMEOUT):
-    """Уровень 2: Проверка TLS-рукопожатия."""
-    try:
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        
-        with socket.create_connection((host, port), timeout=timeout) as sock:
-            with context.wrap_socket(sock, server_hostname=sni) as ssock:
-                # Если TLS handshake прошел - сервер живой
-                return True
-    except Exception:
-        return False
-
-def check_http(host, port, path, sni, timeout=TIMEOUT):
-    """Уровень 3: Проверка HTTP-ответа для WebSocket-конфигов."""
-    try:
-        url = f"https://{host}:{port}{path}"
-        headers = {
-            'Host': sni,
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        response = requests.get(url, headers=headers, timeout=timeout, verify=False)
-        # Любой HTTP-ответ (даже 400/403/404) означает, что сервер живой
-        return response.status_code < 500
-    except Exception:
-        return False
-
-def check_vless_working(config):
-    """Многоуровневая проверка работоспособности VLESS-конфига."""
-    parsed = parse_vless_config(config)
-    if not parsed:
-        return False, "parse_error"
-    
-    host = parsed['host']
-    port = parsed['port']
-    security = parsed['security']
-    sni = parsed['sni']
-    path = parsed['path']
-    conn_type = parsed['type']
-    
-    # Уровень 1: TCP
-    if not check_tcp(host, port):
-        return False, "tcp_failed"
-    
-    # Уровень 2: TLS (для security=tls или security=reality)
-    if security in ['tls', 'reality']:
-        if not check_tls(host, port, sni):
-            return False, "tls_failed"
-    
-    # Уровень 3: HTTP (для WebSocket-конфигов с TLS)
-    if conn_type == 'ws' and security in ['tls', 'reality']:
-        if not check_http(host, port, path, sni):
-            return False, "http_failed"
-    
-    return True, "ok"
-
-def try_decode_base64(text):
-    clean = re.sub(r'\s+', '', text)
-    try:
-        decoded = base64.b64decode(clean, validate=False)
-        return decoded.decode('utf-8', errors='ignore')
-    except Exception:
-        return text
-
 def fetch_and_extract(url):
     configs = []
     try:
         print(f"[INFO] Загрузка: {url}")
-        response = requests.get(url, timeout=20, headers={
+        # Увеличиваем таймаут до 30 сек, так как Jina AI иногда обрабатывает большие каналы пару секунд
+        response = requests.get(url, timeout=30, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         
@@ -167,10 +94,10 @@ def fetch_and_extract(url):
             return configs
             
         text = response.text
-        if "githubusercontent" in url and not text.startswith('vless://'):
-            text = try_decode_base64(text)
-            
+        
+        # Ищем все vless:// ссылки в чистом тексте от Jina AI
         found = re.findall(r'vless://[^\s<>"\']+', text)
+        
         for c in found:
             c = c.rstrip('.,);]')
             c = clean_config_string(c)
@@ -184,29 +111,45 @@ def fetch_and_extract(url):
 
 def main():
     print("=" * 70)
-    print("СБОР VLESS КОНФИГУРАЦИЙ (УЛУЧШЕННАЯ ПРОВЕРКА)")
-    print("Многоуровневая проверка: TCP -> TLS -> HTTP")
+    print("СБОР VLESS КОНФИГУРАЦИЙ (TELEGRAM + JINA AI)")
+    print("Обход блокировок РКН и Cloudflare")
     print("=" * 70)
     
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        f.write("# VLESS конфигурации (проверенные)\n")
+        f.write("# VLESS конфигурации\n")
 
     all_configs = []
+    source_stats = []
+    
     for url in SOURCE_URLS:
-        all_configs.extend(fetch_and_extract(url))
+        configs = fetch_and_extract(url)
+        source_stats.append((url, len(configs)))
+        all_configs.extend(configs)
         
     print("\n" + "=" * 70)
-    print("ДЕДУПЛИКАЦИЯ...")
-    
+    print("СТАТИСТИКА СБОРА:")
+    for url, count in source_stats:
+        # Сокращаем URL для красивого вывода в логах
+        short_url = url.replace('https://r.jina.ai/https://t.me/s/', 'TG: ')
+        print(f"  {count:4d} шт. <- {short_url}")
+    print("=" * 70)
+
+    print("\nГЛУБОКАЯ ДЕДУПЛИКАЦИЯ...")
     seen_keys = set()
     final_configs = []
+    duplicates_removed = 0
+    
     for c in all_configs:
         key = get_canonical_key(c)
         if key not in seen_keys:
             seen_keys.add(key)
             final_configs.append(c)
+        else:
+            duplicates_removed += 1
             
-    print(f"Уникальных профилей: {len(final_configs)}")
+    print(f"Всего собрано: {len(all_configs)}")
+    print(f"Удалено дубликатов: {duplicates_removed}")
+    print(f"Осталось уникальных: {len(final_configs)}")
     print("=" * 70)
 
     if not final_configs:
@@ -215,37 +158,29 @@ def main():
             f.write("# ОШИБКА: Источники не содержат vless:// конфигураций\n")
         return
 
-    print("\nМногоуровневая проверка работоспособности...")
+    print("\nПроверка доступности серверов (TCP)...")
     working_configs = []
-    stats = {'tcp_failed': 0, 'tls_failed': 0, 'http_failed': 0, 'parse_error': 0, 'ok': 0}
     
-    with ThreadPoolExecutor(max_workers=30) as executor:
+    with ThreadPoolExecutor(max_workers=40) as executor:
         future_to_config = {executor.submit(check_vless_working, config): config for config in final_configs}
         for future in as_completed(future_to_config):
             config = future_to_config[future]
             try:
-                is_working, reason = future.result()
-                stats[reason] = stats.get(reason, 0) + 1
-                if is_working:
+                if future.result():
                     working_configs.append(config)
             except Exception:
-                stats['parse_error'] += 1
+                pass
 
-    print(f"\nСтатистика проверки:")
-    print(f"  ✅ Прошли проверку: {stats['ok']}")
-    print(f"  ❌ TCP failed: {stats['tcp_failed']}")
-    print(f"  ❌ TLS failed: {stats['tls_failed']}")
-    print(f"  ❌ HTTP failed: {stats['http_failed']}")
-    print(f"  ❌ Parse error: {stats['parse_error']}")
+    print(f"Успешно прошло TCP-проверку: {len(working_configs)} из {len(final_configs)}")
 
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         if working_configs:
             for config in working_configs:
                 f.write(config + '\n')
-            print(f"\n✅ Сохранено {len(working_configs)} РАБОЧИХ конфигураций.")
+            print(f"✅ Сохранено {len(working_configs)} РАБОЧИХ уникальных конфигураций.")
         else:
-            print("\n[WARN] Ни один конфиг не прошел проверку.")
-            print("💡 Сохраняем все уникальные конфиги без проверки.")
+            print("[WARN] TCP-проверка не прошла ни один сервер (ограничения сети GitHub).")
+            print("💡 Сохраняем ВСЕ уникальные конфигурации без проверки.")
             for config in final_configs:
                 f.write(config + '\n')
             
