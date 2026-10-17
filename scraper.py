@@ -5,26 +5,19 @@ import requests
 from urllib.parse import urlparse, parse_qsl, urlunparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ИСТОЧНИКИ: Telegram-каналы через Jina AI (обходит любые блокировки) + надежные GitHub-агрегаторы
+# ТОЛЬКО ПРОВЕРЕННЫЕ ИСТОЧНИКИ (GitHub-агрегаторы)
 SOURCE_URLS = [
-    # 1. Самый крупный и активный канал с конфигами для v2rayNG (много Reality)
-    "https://r.jina.ai/https://t.me/s/v2ray_configs_pool",
+    # 1. Специально для РФ (VLESS + REALITY с российскими SNI)
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
     
-    # 2. Канал, ориентированный именно на пользователей из РФ (тестируют обход DPI)
-    "https://r.jina.ai/https://t.me/s/V2rayNGmat",
-    
-    # 3. Очень активный канал с большим объемом VLESS и Trojan конфигов
-    "https://r.jina.ai/https://t.me/s/ShadowProxy66",
-    
-    # 4. Официальный канал того самого сайта outlinekeys.com (дублирует их ключи в текстовом виде)
-    "https://r.jina.ai/https://t.me/s/OutlineVpnOfficial",
-
-    # 4. Официальный канал того самого сайта outlinekeys.com (дублирует их ключи в текстовом виде)
-    "https://r.jina.ai/https://t.me/s/internetaccess",
-    
-    
-    # 5. Резервный GitHub-агрегатор, который собирает данные из Telegram и выдает чистый список
+    # 2. Крупный агрегатор с Reality-конфигами (обновляется регулярно)
     "https://raw.githubusercontent.com/Mahdi0024/ProxyCollector/master/sub/proxies.txt",
+    
+    # 3. Стабильный сборщик VLESS (обновляется каждые 2 часа)
+    "https://raw.githubusercontent.com/iboxz/free-v2ray-collector/main/vless.txt",
+    
+    # 4. Агрегатор с частыми обновлениями (каждые 15 минут)
+    "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/Configs.txt",
 ]
 
 OUTPUT_FILE = "vless_configs.txt"
@@ -53,7 +46,7 @@ def get_canonical_key(config):
         return clean_config_string(config).split('#')[0].lower()
 
 def check_vless_working(config):
-    """Простая и быстрая TCP-проверка доступности хоста и порта."""
+    """Простая TCP-проверка доступности хоста и порта."""
     try:
         clean_config = config.replace('vless://', '')
         parts = clean_config.split('@')
@@ -84,12 +77,19 @@ def check_vless_working(config):
     except Exception:
         return False
 
+def try_decode_base64(text):
+    clean = re.sub(r'\s+', '', text)
+    try:
+        decoded = base64.b64decode(clean, validate=False)
+        return decoded.decode('utf-8', errors='ignore')
+    except Exception:
+        return text
+
 def fetch_and_extract(url):
     configs = []
     try:
         print(f"[INFO] Загрузка: {url}")
-        # Увеличиваем таймаут до 30 сек, так как Jina AI иногда обрабатывает большие каналы пару секунд
-        response = requests.get(url, timeout=30, headers={
+        response = requests.get(url, timeout=20, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         
@@ -99,7 +99,10 @@ def fetch_and_extract(url):
             
         text = response.text
         
-        # Ищем все vless:// ссылки в чистом тексте от Jina AI
+        # Если это GitHub raw и текст не начинается с vless://, пробуем декодировать Base64
+        if "githubusercontent" in url and not text.startswith('vless://'):
+            text = try_decode_base64(text)
+            
         found = re.findall(r'vless://[^\s<>"\']+', text)
         
         for c in found:
@@ -115,8 +118,7 @@ def fetch_and_extract(url):
 
 def main():
     print("=" * 70)
-    print("СБОР VLESS КОНФИГУРАЦИЙ (TELEGRAM + JINA AI)")
-    print("Обход блокировок РКН и Cloudflare")
+    print("СБОР VLESS КОНФИГУРАЦИЙ (ПРОВЕРЕННЫЕ ИСТОЧНИКИ)")
     print("=" * 70)
     
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
@@ -133,9 +135,10 @@ def main():
     print("\n" + "=" * 70)
     print("СТАТИСТИКА СБОРА:")
     for url, count in source_stats:
-        # Сокращаем URL для красивого вывода в логах
-        short_url = url.replace('https://r.jina.ai/https://t.me/s/', 'TG: ')
+        # Сокращаем URL для красивого вывода
+        short_url = url.split('/')[-1]
         print(f"  {count:4d} шт. <- {short_url}")
+    print(f"  ИТОГО: {len(all_configs)} ссылок")
     print("=" * 70)
 
     print("\nГЛУБОКАЯ ДЕДУПЛИКАЦИЯ...")
@@ -183,7 +186,7 @@ def main():
                 f.write(config + '\n')
             print(f"✅ Сохранено {len(working_configs)} РАБОЧИХ уникальных конфигураций.")
         else:
-            print("[WARN] TCP-проверка не прошла ни один сервер (ограничения сети GitHub).")
+            print("[WARN] TCP-проверка не прошла ни один сервер.")
             print("💡 Сохраняем ВСЕ уникальные конфигурации без проверки.")
             for config in final_configs:
                 f.write(config + '\n')
