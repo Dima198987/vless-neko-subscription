@@ -18,6 +18,10 @@ SOURCE_URLS = [
     
     # 4. Официальный канал того самого сайта outlinekeys.com (дублирует их ключи в текстовом виде)
     "https://r.jina.ai/https://t.me/s/OutlineVpnOfficial",
+
+    # 4. Официальный канал того самого сайта outlinekeys.com (дублирует их ключи в текстовом виде)
+    "https://r.jina.ai/https://t.me/s/internetaccess",
+    
     
     # 5. Резервный GitHub-агрегатор, который собирает данные из Telegram и выдает чистый список
     "https://raw.githubusercontent.com/Mahdi0024/ProxyCollector/master/sub/proxies.txt",
