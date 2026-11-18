@@ -17,6 +17,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+        
+      - name: Diagnose Yandex OAuth
+        env:
+          YANDEX_TOKEN: ${{ secrets.YANDEX_TOKEN }}
+        run: |
+          HTTP_CODE=$(curl -sS \
+            -o response.json \
+            -w "%{http_code}" \
+            -H "Authorization: OAuth $YANDEX_TOKEN" \
+            "https://cloud-api.yandex.net/v1/disk")
+
+          echo "HTTP status: $HTTP_CODE"
+          echo "API response:"
+          cat response.json
+          rm -f response.json
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            exit 1
+          fi
+
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
