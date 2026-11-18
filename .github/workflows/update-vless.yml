@@ -1,9 +1,10 @@
+
 name: Aggregate and Update VLESS Configs
 
 on:
-  workflow_dispatch:  # Ручной запуск из вкладки Actions
+  workflow_dispatch:
   schedule:
-    - cron: '0 */2 * * *'  # Автоматический запуск каждые 2 часа
+    - cron: '0 */2 * * *'
 
 permissions:
   contents: write
@@ -11,6 +12,7 @@ permissions:
 jobs:
   aggregate-vless:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,14 +30,63 @@ jobs:
       - name: Run aggregator script
         run: python scraper.py
 
+      - name: Upload subscription to Yandex Disk
+        env:
+          YANDEX_TOKEN: ${{ secrets.YANDEX_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          FILE="vless_configs.txt"
+          REMOTE_PATH="disk:/Throne/vless_configs.txt"
+
+          # Проверяем наличие готового файла
+          if [ ! -s "$FILE" ]; then
+            echo "Ошибка: файл отсутствует или пустой!"
+            exit 1
+          fi
+
+          # Создаем папку Throne, если её ещё нет
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -X PUT \
+            -H "Authorization: OAuth $YANDEX_TOKEN" \
+            --get \
+            --data-urlencode "path=disk:/Throne" \
+            "https://cloud-api.yandex.net/v1/disk/resources")
+
+          if [ "$STATUS" != "201" ] && [ "$STATUS" != "409" ]; then
+            echo "Ошибка создания папки. HTTP: $STATUS"
+            exit 1
+          fi
+
+          # Получаем адрес загрузки
+          UPLOAD_URL=$(curl -fsS \
+            -H "Authorization: OAuth $YANDEX_TOKEN" \
+            --get \
+            --data-urlencode "path=$REMOTE_PATH" \
+            --data-urlencode "overwrite=true" \
+            "https://cloud-api.yandex.net/v1/disk/resources/upload" \
+            | jq -r '.href')
+
+          if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" = "null" ]; then
+            echo "Не удалось получить адрес загрузки"
+            exit 1
+          fi
+
+          # Загружаем файл на Яндекс Диск
+          curl -fsS -X PUT \
+            --upload-file "$FILE" \
+            "$UPLOAD_URL"
+
+          echo "Файл успешно загружен на Яндекс Диск!"
+
       - name: Commit and push if changed
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
+
           touch vless_configs.txt
           git add vless_configs.txt
-          
+
           if git diff --staged --quiet; then
             echo "Нет изменений для коммита."
           else
