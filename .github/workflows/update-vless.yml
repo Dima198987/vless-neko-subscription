@@ -1,42 +1,35 @@
-
-name: Aggregate and Update VLESS Configs
+name: Aggregate and Sync VLESS Configs
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Ручной запуск
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '0 */2 * * *' # Каждые 2 часа
 
 permissions:
   contents: write
 
 jobs:
+  # ЗАДАНИЕ 1: Сборка, проверка Яндекс.Диска и сохранение в GitHub
   aggregate-vless:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-        
       - name: Diagnose Yandex OAuth
         env:
           YANDEX_TOKEN: ${{ secrets.YANDEX_TOKEN }}
         run: |
-          HTTP_CODE=$(curl -sS \
-            -o response.json \
-            -w "%{http_code}" \
+          HTTP_CODE=$(curl -sS -o response.json -w "%{http_code}" \
             -H "Authorization: OAuth $YANDEX_TOKEN" \
             "https://cloud-api.yandex.net/v1/disk")
-
           echo "HTTP status: $HTTP_CODE"
-          echo "API response:"
           cat response.json
           rm -f response.json
-
           if [ "$HTTP_CODE" != "200" ]; then
+            echo "Ошибка авторизации Яндекс.Диска!"
             exit 1
           fi
-
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -51,81 +44,56 @@ jobs:
       - name: Run aggregator script
         run: python scraper.py
 
-      - name: Upload subscription to Yandex Disk
+      - name: Upload subscription to Yandex Disk (Backup)
         env:
           YANDEX_TOKEN: ${{ secrets.YANDEX_TOKEN }}
         run: |
           set -euo pipefail
-
           FILE="vless_configs.txt"
           REMOTE_PATH="disk:/Throne/vless_configs.txt"
 
-          # Проверяем наличие готового файла
           if [ ! -s "$FILE" ]; then
             echo "Ошибка: файл отсутствует или пустой!"
             exit 1
           fi
 
-          # Создаем папку Throne, если её ещё нет
-          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
-            -X PUT \
+          # Создаем папку, если нет
+          curl -sS -o /dev/null -X PUT \
             -H "Authorization: OAuth $YANDEX_TOKEN" \
-            --get \
-            --data-urlencode "path=disk:/Throne" \
-            "https://cloud-api.yandex.net/v1/disk/resources")
-
-          if [ "$STATUS" != "201" ] && [ "$STATUS" != "409" ]; then
-            echo "Ошибка создания папки. HTTP: $STATUS"
-            exit 1
-          fi
+            --get --data-urlencode "path=disk:/Throne" \
+            "https://cloud-api.yandex.net/v1/disk/resources"
 
           # Получаем адрес загрузки
-          UPLOAD_URL=$(curl -fsS \
-            -H "Authorization: OAuth $YANDEX_TOKEN" \
-            --get \
-            --data-urlencode "path=$REMOTE_PATH" \
-            --data-urlencode "overwrite=true" \
-            "https://cloud-api.yandex.net/v1/disk/resources/upload" \
-            | jq -r '.href')
+          UPLOAD_URL=$(curl -fsS -H "Authorization: OAuth $YANDEX_TOKEN" \
+            --get --data-urlencode "path=$REMOTE_PATH" --data-urlencode "overwrite=true" \
+            "https://cloud-api.yandex.net/v1/disk/resources/upload" | jq -r '.href')
 
           if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" = "null" ]; then
             echo "Не удалось получить адрес загрузки"
             exit 1
           fi
 
-          # Загружаем файл на Яндекс Диск
-          curl -fsS -X PUT \
-            --upload-file "$FILE" \
-            "$UPLOAD_URL"
+          curl -fsS -X PUT --upload-file "$FILE" "$UPLOAD_URL"
+          echo "Файл успешно загружен на Яндекс Диск (как резервная копия)!"
 
-          echo "Файл успешно загружен на Яндекс Диск!"
-
-      - name: Commit and push if changed
+      - name: Commit and push to GitHub
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
+          
           touch vless_configs.txt
           git add vless_configs.txt
-
+          
           if git diff --staged --quiet; then
             echo "Нет изменений для коммита."
           else
-            git commit -m "chore: обновлены конфигурации VLESS"
+            git commit -m "chore: обновлены конфигурации VLESS [skip ci]"
             git push
           fi
 
-name: Sync to GitFlic  # Дублируем файл на GitFlic
-
-on:
-  push:
-    paths:
-      - 'vless_configs.txt' # Имя вашего файла
-    branches:
-      - main # Или master
-
-jobs:
-  sync:
+  # ЗАДАНИЕ 2: Отправка файла из GitHub на GitFlic
+  sync-to-gitflic:
+    needs: aggregate-vless # Ждет успешного завершения первого задания
     runs-on: ubuntu-latest
     steps:
       - name: Checkout GitHub repo
@@ -138,11 +106,10 @@ jobs:
 
       - name: Push to GitFlic
         env:
-          # ЗАМЕНИТЕ username и repo-name на ваши реальные данные из GitFlic
           GITFLIC_URL: "https://oauth2:${{ secrets.GITFLIC_TOKEN }}@gitflic.ru/project/dmartyan/vless-sub.git"
         run: |
           git remote add gitflic "$GITFLIC_URL"
           git add vless_configs.txt
-          # Коммитим только если есть изменения, чтобы не спамить историей
-          git commit -m "Auto-sync vless configs from GitHub" || echo "No changes to commit"
+          git commit -m "Auto-sync vless configs to GitFlic" || echo "No changes to commit"
           git push gitflic HEAD:main
+          echo "Файл успешно отправлен на GitFlic!"
