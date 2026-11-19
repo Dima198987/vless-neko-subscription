@@ -114,3 +114,35 @@ jobs:
             git commit -m "chore: обновлены конфигурации VLESS"
             git push
           fi
+
+name: Sync to GitFlic  # Дублируем файл на GitFlic
+
+on:
+  push:
+    paths:
+      - 'vless_configs.txt' # Имя вашего файла
+    branches:
+      - main # Или master
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout GitHub repo
+        uses: actions/checkout@v4
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+
+      - name: Push to GitFlic
+        env:
+          # ЗАМЕНИТЕ username и repo-name на ваши реальные данные из GitFlic
+          GITFLIC_URL: "https://oauth2:${{ secrets.GITFLIC_TOKEN }}@gitflic.ru/project/dmartyan/vless-sub.git"
+        run: |
+          git remote add gitflic "$GITFLIC_URL"
+          git add vless_configs.txt
+          # Коммитим только если есть изменения, чтобы не спамить историей
+          git commit -m "Auto-sync vless configs from GitHub" || echo "No changes to commit"
+          git push gitflic HEAD:main
