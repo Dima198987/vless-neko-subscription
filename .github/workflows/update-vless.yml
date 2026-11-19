@@ -12,11 +12,8 @@ jobs:
   process-and-sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout GitHub repository
         uses: actions/checkout@v4
-        with:
-          # Загружаем полную историю, чтобы избежать конфликтов при пуше в два места
-          fetch-depth: 0 
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,32 +36,51 @@ jobs:
           fi
           echo "✅ Файл успешно сгенерирован."
 
-      - name: Configure Git
+      - name: Configure Git for main repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Commit and Sync to GitHub and GitFlic
+      - name: Commit and Push to GitHub (Full Repo)
+        run: |
+          git add vless_configs.txt
+          if git diff --staged --quiet; then
+            echo "⚠️ Нет изменений. Пропускаем коммит в основной репозиторий."
+          else
+            git commit -m "chore: обновлены конфигурации VLESS [skip ci]"
+            git push origin main
+            echo "✅ Основной репозиторий GitHub обновлен."
+          fi
+
+      - name: Sync ONLY config file to GitFlic
         env:
           GITFLIC_URL: "https://dmartyan:${{ secrets.GITFLIC_TOKEN }}@gitflic.ru/project/dmartyan/vless-sub.git"
         run: |
+          # 1. Создаем изолированную папку для GitFlic
+          mkdir gitflic-temp
+          cd gitflic-temp
+          
+          # 2. Инициализируем git и привязываем к GitFlic
+          git init
+          git remote add origin "$GITFLIC_URL"
+          
+          # 3. Пытаемся получить текущее состояние (игнорируем ошибку, если репозиторий совершенно пуст)
+          git pull origin main || echo "Репозиторий GitFlic пуст, создаем новую историю"
+          
+          # 4. Копируем ТОЛЬКО файл подписки из родительской папки (основной репозиторий)
+          cp ../vless_configs.txt .
+          
+          # 5. Настраиваем git локально для этой папки
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
           git add vless_configs.txt
           
+          # 6. Коммитим и отправляем, если есть изменения
           if git diff --staged --quiet; then
-            echo "⚠️ Нет изменений в конфигурациях. Пропускаем синхронизацию."
+            echo "⚠️ Нет изменений в файле подписки. Пропускаем отправку на GitFlic."
           else
-            echo "🔄 Найдены изменения. Выполняем коммит и синхронизацию..."
-            
-            # 1. Коммит и пуш в основной репозиторий GitHub
-            git commit -m "chore: обновлены конфигурации VLESS [skip ci]"
-            git push origin main
-            
-            # 2. Добавляем GitFlic как удаленный репозиторий
-            git remote add gitflic "$GITFLIC_URL"
-            
-            # 3. ПРИНУДИТЕЛЬНЫЙ пуш на GitFlic, чтобы избежать ошибок рассинхронизации истории
-            echo "Отправляем зеркало на GitFlic..."
-            git push --force gitflic main
-            
-            echo "✅ Файл успешно синхронизирован с GitHub и GitFlic!"
+            git commit -m "chore: обновлен файл подписки vless_configs.txt"
+            git push -u origin main
+            echo "✅ ТОЛЬКО файл vless_configs.txt успешно отправлен на GitFlic!"
           fi
