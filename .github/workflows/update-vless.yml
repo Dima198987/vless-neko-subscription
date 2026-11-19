@@ -1,4 +1,4 @@
-name: Aggregate and Sync VLESS Configs
+name: Aggregate and Sync to GitFlic
 
 on:
   workflow_dispatch: # Ручной запуск по кнопке
@@ -14,6 +14,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Загружаем полную историю, чтобы избежать конфликтов при пуше в два места
+          fetch-depth: 0 
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -36,50 +39,19 @@ jobs:
           fi
           echo "✅ Файл успешно сгенерирован."
 
-      - name: Upload backup to Yandex Disk
-        env:
-          YANDEX_TOKEN: ${{ secrets.YANDEX_TOKEN }}
-        run: |
-          if [ -z "$YANDEX_TOKEN" ]; then
-            echo "⚠️ YANDEX_TOKEN не задан, пропускаем загрузку на Яндекс.Диск."
-            exit 0
-          fi
-          
-          REMOTE_PATH="disk:/Throne/vless_configs.txt"
-          
-          # Создаем папку (игнорируем ошибки, если она уже существует)
-          curl -sS -o /dev/null -X PUT \
-            -H "Authorization: OAuth $YANDEX_TOKEN" \
-            --get --data-urlencode "path=disk:/Throne" \
-            "https://cloud-api.yandex.net/v1/disk/resources" || true
-
-          # Получаем адрес загрузки
-          UPLOAD_URL=$(curl -fsS -H "Authorization: OAuth $YANDEX_TOKEN" \
-            --get --data-urlencode "path=$REMOTE_PATH" --data-urlencode "overwrite=true" \
-            "https://cloud-api.yandex.net/v1/disk/resources/upload" | jq -r '.href')
-
-          if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" = "null" ]; then
-            echo "❌ Не удалось получить адрес загрузки для Яндекс.Диска"
-            exit 1
-          fi
-
-          curl -fsS -X PUT --upload-file "vless_configs.txt" "$UPLOAD_URL"
-          echo "✅ Резервная копия успешно загружена на Яндекс Диск!"
-
       - name: Configure Git
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Commit and Push to GitHub and GitFlic
+      - name: Commit and Sync to GitHub and GitFlic
         env:
-          # Используем ваш логин dmartyan и токен для аутентификации
           GITFLIC_URL: "https://dmartyan:${{ secrets.GITFLIC_TOKEN }}@gitflic.ru/project/dmartyan/vless-sub.git"
         run: |
           git add vless_configs.txt
           
           if git diff --staged --quiet; then
-            echo "⚠️ Нет изменений в конфигурациях. Пропускаем коммит и синхронизацию."
+            echo "⚠️ Нет изменений в конфигурациях. Пропускаем синхронизацию."
           else
             echo "🔄 Найдены изменения. Выполняем коммит и синхронизацию..."
             
@@ -87,9 +59,12 @@ jobs:
             git commit -m "chore: обновлены конфигурации VLESS [skip ci]"
             git push origin main
             
-            # 2. Добавляем GitFlic как удаленный репозиторий и пушим туда же
+            # 2. Добавляем GitFlic как удаленный репозиторий
             git remote add gitflic "$GITFLIC_URL"
-            git push gitflic main
+            
+            # 3. ПРИНУДИТЕЛЬНЫЙ пуш на GitFlic, чтобы избежать ошибок рассинхронизации истории
+            echo "Отправляем зеркало на GitFlic..."
+            git push --force gitflic main
             
             echo "✅ Файл успешно синхронизирован с GitHub и GitFlic!"
           fi
