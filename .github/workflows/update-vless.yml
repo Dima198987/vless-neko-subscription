@@ -1,4 +1,4 @@
-name: Aggregate and Sync to GitFlic
+name: Aggregate and Sync to SourceCraft
 
 on:
   workflow_dispatch: # Ручной запуск по кнопке
@@ -52,20 +52,21 @@ jobs:
             echo "✅ Основной репозиторий GitHub обновлен."
           fi
 
-      - name: Sync ONLY config file to GitFlic
+      - name: Sync ONLY config file to SourceCraft
         env:
-          GITFLIC_URL: "https://dmartyan:${{ secrets.GITFLIC_TOKEN }}@gitflic.ru/project/dmartyan/vless-sub.git"
+          # HTTPS-ссылка с использованием токена в качестве пароля
+          SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
         run: |
-          # 1. Создаем изолированную папку для GitFlic
-          mkdir gitflic-temp
-          cd gitflic-temp
+          # 1. Создаем изолированную папку для SourceCraft
+          mkdir sourcecraft-temp
+          cd sourcecraft-temp
           
-          # 2. Инициализируем git СРАЗУ с веткой main (это исправляет ошибку master/main)
+          # 2. Инициализируем git сразу с веткой main
           git init -b main
-          git remote add origin "$GITFLIC_URL"
+          git remote add origin "$SOURCECRAFT_URL"
           
           # 3. Пытаемся получить текущее состояние (игнорируем ошибку, если репозиторий совершенно пуст)
-          git pull origin main || echo "Репозиторий GitFlic пуст, создаем новую историю"
+          git pull origin main || echo "Репозиторий SourceCraft пуст, создаем новую историю"
           
           # 4. Копируем ТОЛЬКО файл подписки из родительской папки
           cp ../vless_configs.txt .
@@ -78,9 +79,9 @@ jobs:
           
           # 6. Коммитим и отправляем, если есть изменения
           if git diff --staged --quiet; then
-            echo "⚠️ Нет изменений в файле подписки. Пропускаем отправку на GitFlic."
+            echo "⚠️ Нет изменений в файле подписки. Пропускаем отправку на SourceCraft."
           else
             git commit -m "chore: обновлен файл подписки vless_configs.txt"
             git push -u origin main
-            echo "✅ ТОЛЬКО файл vless_configs.txt успешно отправлен на GitFlic!"
+            echo "✅ ТОЛЬКО файл vless_configs.txt успешно отправлен на SourceCraft!"
           fi
