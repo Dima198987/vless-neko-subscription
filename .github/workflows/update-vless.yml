@@ -74,23 +74,27 @@ jobs:
           # 3. Пытаемся получить текущее состояние (игнорируем ошибку, если репозиторий совершенно пуст)
           git pull origin main || echo "Репозиторий SourceCraft пуст, создаем новую историю"
           
-          # 4. Копируем наш сгенерированный файл из родительской папки
+          # 4. УДАЛЯЕМ все старые .txt файлы из репозитория (кроме папки .git)
+          echo "Очищаем старые файлы подписок..."
+          find . -maxdepth 1 -type f -name "*.txt" -delete
+          
+          # 5. Копируем наш сгенерированный файл из родительской папки
           cp ../vless_configs.txt .
           
-          # 5. Скачиваем внешние подписки прямо в эту изолированную папку
+          # 6. Скачиваем внешние подписки прямо в эту изолированную папку
           echo "Скачиваем внешние подписки..."
           curl -sS -f -o external_zieng2.txt "$EXT_SUB_URL_1" || echo "⚠️ Не удалось скачать подписку zieng2."
           curl -sS -f -o external_igareck.txt "$EXT_SUB_URL_2" || echo "⚠️ Не удалось скачать подписку igareck."
           curl -sS -f -o external_barry_far.txt "$EXT_SUB_URL_3" || echo "⚠️ Не удалось скачать подписку barry-far."
           
-          # 6. Настраиваем git локально для этой папки
+          # 7. Настраиваем git локально для этой папки
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 7. Добавляем ВСЕ файлы в коммит
-          git add vless_configs.txt external_zieng2.txt external_igareck.txt external_barry_far.txt
+          # 8. Добавляем ВСЕ изменения (включая удаления старых файлов)
+          git add -A
           
-          # 8. Коммитим и отправляем, только если есть реальные изменения
+          # 9. Коммитим и отправляем, только если есть реальные изменения
           if git diff --staged --quiet; then
             echo "⚠️ Нет изменений в файлах подписок. Пропускаем отправку на SourceCraft."
           else
