@@ -34,7 +34,7 @@ jobs:
             echo "❌ Ошибка: файл vless_configs.txt отсутствует или пустой!"
             exit 1
           fi
-          echo "✅ Файл успешно сгенерирован."
+          echo "✅ Локальный файл успешно сгенерирован."
 
       - name: Configure Git for main repo
         run: |
@@ -54,10 +54,12 @@ jobs:
 
       - name: Sync Local and External Files to SourceCraft
         env:
-          # Ссылка для авторизации в SourceCraft (замените dmartyan/vless-sub при необходимости)
+          # Ссылка для авторизации в SourceCraft
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
-          # Ссылка на внешнюю подписку, которую мы хотим дублировать
-          EXT_SUB_URL: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
+          # Внешняя подписка 1
+          EXT_SUB_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
+          # Внешняя подписка 2
+          EXT_SUB_URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
         run: |
           # 1. Создаем изолированную папку для SourceCraft
           mkdir sourcecraft-temp
@@ -73,22 +75,23 @@ jobs:
           # 4. Копируем наш сгенерированный файл из родительской папки
           cp ../vless_configs.txt .
           
-          # 5. Скачиваем внешнюю подписку прямо в эту изолированную папку
-          echo "Скачиваем внешнюю подписку..."
-          curl -sS -f -o external_vless.txt "$EXT_SUB_URL" || echo "⚠️ Не удалось скачать внешнюю подписку, продолжаем только с локальной."
+          # 5. Скачиваем внешние подписки прямо в эту изолированную папку
+          echo "Скачиваем внешние подписки..."
+          curl -sS -f -o external_zieng2.txt "$EXT_SUB_URL_1" || echo "⚠️ Не удалось скачать подписку zieng2."
+          curl -sS -f -o external_igareck.txt "$EXT_SUB_URL_2" || echo "⚠️ Не удалось скачать подписку igareck."
           
           # 6. Настраиваем git локально для этой папки
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 7. Добавляем ОБА файла в коммит (если они существуют)
-          git add vless_configs.txt external_vless.txt
+          # 7. Добавляем ВСЕ файлы в коммит
+          git add vless_configs.txt external_zieng2.txt external_igareck.txt
           
           # 8. Коммитим и отправляем, только если есть реальные изменения
           if git diff --staged --quiet; then
             echo "⚠️ Нет изменений в файлах подписок. Пропускаем отправку на SourceCraft."
           else
-            git commit -m "chore: обновлены файлы подписок (локальная + внешняя)"
+            git commit -m "chore: обновлены файлы подписок (локальная + внешние)"
             git push -u origin main
             echo "✅ Файлы успешно отправлены на SourceCraft!"
           fi
