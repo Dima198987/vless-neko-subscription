@@ -52,10 +52,12 @@ jobs:
             echo "✅ Основной репозиторий GitHub обновлен."
           fi
 
-      - name: Sync ONLY config file to SourceCraft
+      - name: Sync Local and External Files to SourceCraft
         env:
-          # HTTPS-ссылка с использованием токена в качестве пароля
+          # Ссылка для авторизации в SourceCraft (замените dmartyan/vless-sub при необходимости)
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
+          # Ссылка на внешнюю подписку, которую мы хотим дублировать
+          EXT_SUB_URL: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
         run: |
           # 1. Создаем изолированную папку для SourceCraft
           mkdir sourcecraft-temp
@@ -68,20 +70,25 @@ jobs:
           # 3. Пытаемся получить текущее состояние (игнорируем ошибку, если репозиторий совершенно пуст)
           git pull origin main || echo "Репозиторий SourceCraft пуст, создаем новую историю"
           
-          # 4. Копируем ТОЛЬКО файл подписки из родительской папки
+          # 4. Копируем наш сгенерированный файл из родительской папки
           cp ../vless_configs.txt .
           
-          # 5. Настраиваем git локально для этой папки
+          # 5. Скачиваем внешнюю подписку прямо в эту изолированную папку
+          echo "Скачиваем внешнюю подписку..."
+          curl -sS -f -o external_vless.txt "$EXT_SUB_URL" || echo "⚠️ Не удалось скачать внешнюю подписку, продолжаем только с локальной."
+          
+          # 6. Настраиваем git локально для этой папки
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          git add vless_configs.txt
+          # 7. Добавляем ОБА файла в коммит (если они существуют)
+          git add vless_configs.txt external_vless.txt
           
-          # 6. Коммитим и отправляем, если есть изменения
+          # 8. Коммитим и отправляем, только если есть реальные изменения
           if git diff --staged --quiet; then
-            echo "⚠️ Нет изменений в файле подписки. Пропускаем отправку на SourceCraft."
+            echo "⚠️ Нет изменений в файлах подписок. Пропускаем отправку на SourceCraft."
           else
-            git commit -m "chore: обновлен файл подписки vless_configs.txt"
+            git commit -m "chore: обновлены файлы подписок (локальная + внешняя)"
             git push -u origin main
-            echo "✅ ТОЛЬКО файл vless_configs.txt успешно отправлен на SourceCraft!"
+            echo "✅ Файлы успешно отправлены на SourceCraft!"
           fi
