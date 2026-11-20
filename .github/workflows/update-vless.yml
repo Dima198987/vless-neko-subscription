@@ -60,6 +60,8 @@ jobs:
           EXT_SUB_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
           # Внешняя подписка 2
           EXT_SUB_URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
+          # Внешняя подписка 3
+          EXT_SUB_URL_3: "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Sub1.txt"
         run: |
           # 1. Создаем изолированную папку для SourceCraft
           mkdir sourcecraft-temp
@@ -79,13 +81,14 @@ jobs:
           echo "Скачиваем внешние подписки..."
           curl -sS -f -o external_zieng2.txt "$EXT_SUB_URL_1" || echo "⚠️ Не удалось скачать подписку zieng2."
           curl -sS -f -o external_igareck.txt "$EXT_SUB_URL_2" || echo "⚠️ Не удалось скачать подписку igareck."
+          curl -sS -f -o external_barry_far.txt "$EXT_SUB_URL_3" || echo "⚠️ Не удалось скачать подписку barry-far."
           
           # 6. Настраиваем git локально для этой папки
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           # 7. Добавляем ВСЕ файлы в коммит
-          git add vless_configs.txt external_zieng2.txt external_igareck.txt
+          git add vless_configs.txt external_zieng2.txt external_igareck.txt external_barry_far.txt
           
           # 8. Коммитим и отправляем, только если есть реальные изменения
           if git diff --staged --quiet; then
