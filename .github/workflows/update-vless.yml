@@ -52,16 +52,14 @@ jobs:
             echo "✅ Основной репозиторий GitHub обновлен."
           fi
 
-      - name: Sync Local and External Files to SourceCraft
+      - name: Sync Exact Files to SourceCraft
         env:
           # Ссылка для авторизации в SourceCraft
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
           # Внешняя подписка 1
-          EXT_SUB_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
+          EXT_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
           # Внешняя подписка 2
-          EXT_SUB_URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
-          # Внешняя подписка 3
-          EXT_SUB_URL_3: "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Sub1.txt"
+          EXT_URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
         run: |
           # 1. Создаем изолированную папку для SourceCraft
           mkdir sourcecraft-temp
@@ -74,31 +72,30 @@ jobs:
           # 3. Пытаемся получить текущее состояние (игнорируем ошибку, если репозиторий совершенно пуст)
           git pull origin main || echo "Репозиторий SourceCraft пуст, создаем новую историю"
           
-          # 4. УДАЛЯЕМ все старые .txt файлы из репозитория (кроме папки .git)
+          # 4. УДАЛЯЕМ все старые .txt файлы из репозитория, чтобы не было мусора
           echo "Очищаем старые файлы подписок..."
           find . -maxdepth 1 -type f -name "*.txt" -delete
           
-          # 5. Копируем наш сгенерированный файл из родительской папки
+          # 5. Копируем наш сгенерированный файл с ОРИГИНАЛЬНЫМ именем
           cp ../vless_configs.txt .
           
-          # 6. Скачиваем внешние подписки прямо в эту изолированную папку
+          # 6. Скачиваем внешние подписки с ОРИГИНАЛЬНЫМИ именами файлов
           echo "Скачиваем внешние подписки..."
-          curl -sS -f -o external_zieng2.txt "$EXT_SUB_URL_1" || echo "⚠️ Не удалось скачать подписку zieng2."
-          curl -sS -f -o external_igareck.txt "$EXT_SUB_URL_2" || echo "⚠️ Не удалось скачать подписку igareck."
-          curl -sS -f -o external_barry_far.txt "$EXT_SUB_URL_3" || echo "⚠️ Не удалось скачать подписку barry-far."
+          curl -sS -f -o vless_universal.txt "$EXT_URL_1" || echo "⚠️ Не удалось скачать vless_universal.txt"
+          curl -sS -f -o Vless-Reality-White-Lists-Rus-Mobile.txt "$EXT_URL_2" || echo "⚠️ Не удалось скачать Vless-Reality-White-Lists-Rus-Mobile.txt"
           
           # 7. Настраиваем git локально для этой папки
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 8. Добавляем ВСЕ изменения (включая удаления старых файлов)
+          # 8. Добавляем ВСЕ изменения (включая удаления старых и создание новых с правильными именами)
           git add -A
           
           # 9. Коммитим и отправляем, только если есть реальные изменения
           if git diff --staged --quiet; then
             echo "⚠️ Нет изменений в файлах подписок. Пропускаем отправку на SourceCraft."
           else
-            git commit -m "chore: обновлены файлы подписок (локальная + внешние)"
+            git commit -m "chore: синхронизация файлов подписок с оригинальными именами"
             git push -u origin main
             echo "✅ Файлы успешно отправлены на SourceCraft!"
           fi
