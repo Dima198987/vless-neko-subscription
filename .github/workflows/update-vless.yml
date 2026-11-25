@@ -3,7 +3,7 @@ name: Aggregate and Sync to SourceCraft
 on:
   workflow_dispatch: # Ручной запуск по кнопке
   schedule:
-    - cron: '0 */2 * * *' # Автоматический запуск каждые 2 часа
+    - cron: '*/30 * * * *' # Автоматический запуск каждые 30 минут
 
 permissions:
   contents: write
