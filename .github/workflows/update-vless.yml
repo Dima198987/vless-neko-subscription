@@ -52,7 +52,7 @@ jobs:
             echo "✅ Основной репозиторий GitHub обновлен."
           fi
 
-      - name: Sync Exact Files to SourceCraft (Bypass Cache)
+      - name: Sync Exact Files to SourceCraft
         env:
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
           EXT_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
@@ -63,6 +63,28 @@ jobs:
           
           git init -b main
           git remote add origin "$SOURCECRAFT_URL"
-          git pull origin main || echo "Репозиторий SourceCraft пуст, создаем новую историю"
+          git pull origin main || echo "Репозиторий SourceCraft пуст"
           
-          echo "Очищаем старые файлы
+          echo "Очищаем старые файлы..."
+          find . -maxdepth 1 -type f -name "*.txt" -delete
+          
+          cp ../vless_configs.txt .
+          
+          echo "Скачиваем внешние подписки с принудительным сбросом кэша..."
+          # Добавляем ?t=текущее_время прямо в URL. Это гарантированно ломает кэш GitHub CDN
+          curl -sS -f -H "Cache-Control: no-cache" -o vless_universal.txt "${EXT_URL_1}?t=$(date +%s)" || echo "⚠️ Ошибка скачивания vless_universal.txt"
+          
+          curl -sS -f -H "Cache-Control: no-cache" -o Vless-Reality-White-Lists-Rus-Mobile.txt "${EXT_URL_2}?t=$(date +%s)" || echo "⚠️ Ошибка скачивания Vless-Reality"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add -A
+          
+          if git diff --staged --quiet; then
+            echo "⚠️ Нет изменений в файлах. Пропускаем отправку."
+          else
+            git commit -m "chore: синхронизация файлов с обходом кэша"
+            git push -u origin main
+            echo "✅ Файлы успешно отправлены на SourceCraft!"
+          fi
