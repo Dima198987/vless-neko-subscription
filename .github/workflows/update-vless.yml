@@ -3,7 +3,7 @@ name: Aggregate and Sync to SourceCraft
 on:
   workflow_dispatch: # Ручной запуск по кнопке
   schedule:
-    - cron: '12,42 * * * *' # Нестандартное время: каждые ~30 минут, но без задержек GitHub
+    - cron: '12,42 * * * *' # Нестандартное время для избегания задержек GitHub
 
 permissions:
   contents: write
@@ -52,50 +52,17 @@ jobs:
             echo "✅ Основной репозиторий GitHub обновлен."
           fi
 
-      - name: Sync Exact Files to SourceCraft
+      - name: Sync Exact Files to SourceCraft (Bypass Cache)
         env:
-          # Ссылка для авторизации в SourceCraft
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
-          # Внешняя подписка 1
           EXT_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
-          # Внешняя подписка 2
           EXT_URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
         run: |
-          # 1. Создаем изолированную папку для SourceCraft
           mkdir sourcecraft-temp
           cd sourcecraft-temp
           
-          # 2. Инициализируем git сразу с веткой main
           git init -b main
           git remote add origin "$SOURCECRAFT_URL"
-          
-          # 3. Пытаемся получить текущее состояние (игнорируем ошибку, если репозиторий совершенно пуст)
           git pull origin main || echo "Репозиторий SourceCraft пуст, создаем новую историю"
           
-          # 4. УДАЛЯЕМ все старые .txt файлы из репозитория, чтобы не было мусора
-          echo "Очищаем старые файлы подписок..."
-          find . -maxdepth 1 -type f -name "*.txt" -delete
-          
-          # 5. Копируем наш сгенерированный файл с ОРИГИНАЛЬНЫМ именем
-          cp ../vless_configs.txt .
-          
-          # 6. Скачиваем внешние подписки с ОРИГИНАЛЬНЫМИ именами файлов
-          echo "Скачиваем внешние подписки..."
-          curl -sS -f -o vless_universal.txt "$EXT_URL_1" || echo "⚠️ Не удалось скачать vless_universal.txt"
-          curl -sS -f -o Vless-Reality-White-Lists-Rus-Mobile.txt "$EXT_URL_2" || echo "⚠️ Не удалось скачать Vless-Reality-White-Lists-Rus-Mobile.txt"
-          
-          # 7. Настраиваем git локально для этой папки
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # 8. Добавляем ВСЕ изменения (включая удаления старых и создание новых с правильными именами)
-          git add -A
-          
-          # 9. Коммитим и отправляем, только если есть реальные изменения
-          if git diff --staged --quiet; then
-            echo "⚠️ Нет изменений в файлах подписок. Пропускаем отправку на SourceCraft."
-          else
-            git commit -m "chore: синхронизация файлов подписок с оригинальными именами"
-            git push -u origin main
-            echo "✅ Файлы успешно отправлены на SourceCraft!"
-          fi
+          echo "Очищаем старые файлы
