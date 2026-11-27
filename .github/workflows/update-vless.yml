@@ -1,9 +1,9 @@
-name: Aggregate and Sync to SourceCraft
+name: Aggregate and Force Sync to SourceCraft
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '12,42 * * * *'
+    - cron: '12,42 * * * *' # Запуск каждые ~30 минут
 
 permissions:
   contents: write
@@ -28,7 +28,7 @@ jobs:
       - name: Run aggregator script
         run: python scraper.py
 
-      - name: Check if file exists and is not empty
+      - name: Check if file exists
         run: |
           if [ ! -s "vless_configs.txt" ]; then
             echo "❌ Ошибка: файл vless_configs.txt отсутствует или пустой!"
@@ -43,59 +43,49 @@ jobs:
       - name: Commit to GitHub Main Repo
         run: |
           git add vless_configs.txt
-          if git diff --staged --quiet; then
-            echo "Нет изменений для основного репозитория."
-          else
-            git commit -m "chore: update local configs [skip ci]"
-            git push origin main
-          fi
+          git commit -m "chore: update local configs [skip ci]" || echo "No changes in main repo"
+          git push origin main || true
 
-      - name: FORCE SYNC to SourceCraft (Fixed Git Branching)
+      - name: FORCE UPDATE SourceCraft (Без сравнений)
         env:
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
           EXT_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
           EXT_URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
         run: |
-          # 1. Создаем ЧИСТУЮ папку
+          # 1. Полная очистка
           rm -rf sync-temp
           mkdir sync-temp
           cd sync-temp
           
-          # 2. Инициализируем репозиторий сразу с веткой main
+          # 2. Инициализация
           git init -b main
           git remote add origin "$SOURCECRAFT_URL"
-          
-          # 3. Получаем данные с сервера (игнорируем ошибку, если репозиторий абсолютно пуст)
           git fetch origin || true
           
-          # 4. ЖЕСТКО приводим ветку main в соответствие с сервером (исправляет ошибку detached HEAD)
-          git reset --hard origin/main || true
+          # 3. Синхронизация ветки (исправляет detached HEAD)
+          git checkout -B main origin/main || git checkout --orphan main
           
-          # 5. Удаляем ВСЕ старые .txt файлы
+          # 4. Удаляем старые файлы
           find . -maxdepth 1 -type f -name "*.txt" -delete
           
-          # 6. Копируем свежий локальный файл
-          cp ../vless_configs.txt .
+          # 5. Добавляем TIMESTAMP в начало файла. Это ГАРАНТИРУЕТ, что Git увидит изменение каждый раз!
+          echo "# LAST_UPDATE: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" > vless_configs.txt
+          cat ../vless_configs.txt >> vless_configs.txt
           
-          # 7. Скачиваем внешние файлы с обходом кэша
+          # 6. Скачиваем внешние файлы с обходом кэша
           echo "Скачиваем zieng2..."
-          curl -sS -f -H "Cache-Control: no-cache" -o vless_universal.txt "${EXT_URL_1}?t=$(date +%s)"
+          curl -sS -f -H "Cache-Control: no-cache" -o vless_universal.txt "${EXT_URL_1}?t=$(date +%s)" || echo "⚠️ Ошибка zieng2"
           
           echo "Скачиваем igareck..."
-          curl -sS -f -H "Cache-Control: no-cache" -o Vless-Reality-White-Lists-Rus-Mobile.txt "${EXT_URL_2}?t=$(date +%s)"
+          curl -sS -f -H "Cache-Control: no-cache" -o Vless-Reality-White-Lists-Rus-Mobile.txt "${EXT_URL_2}?t=$(date +%s)" || echo "⚠️ Ошибка igareck"
           
-          # 8. ДИАГНОСТИКА
-          echo "--- РАЗМЕРЫ ФАЙЛОВ ПЕРЕД ОТПРАВКОЙ ---"
+          echo "--- РАЗМЕРЫ ФАЙЛОВ ---"
           wc -c *.txt
-          echo "--------------------------------------"
+          echo "----------------------"
           
-          # 9. Добавляем все изменения
+          # 7. БЕЗУСЛОВНЫЙ коммит и пуш
           git add -A
-          
-          # 10. Коммитим (даже если изменений нет, чтобы обновить дату на сайте)
-          git commit --allow-empty -m "chore: forced sync $(date +%s)"
-          
-          # 11. ПРИНУДИТЕЛЬНЫЙ ПУШ. Теперь он сработает, так как ветка main существует и корректна
+          git commit -m "chore: forced update $(date +%s)"
           git push origin main --force
           
-          echo "✅ ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ УСПЕШНО ЗАВЕРШЕНА!"
+          echo "✅ БЕЗУСЛОВНОЕ ОБНОВЛЕНИЕ НА SOURCECRAFT ЗАВЕРШЕНО!"
