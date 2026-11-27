@@ -1,9 +1,9 @@
 name: Aggregate and Sync to SourceCraft
 
 on:
-  workflow_dispatch: # Ручной запуск по кнопке
+  workflow_dispatch:
   schedule:
-    - cron: '12,42 * * * *' # Нестандартное время для избегания задержек GitHub
+    - cron: '12,42 * * * *'
 
 permissions:
   contents: write
@@ -34,57 +34,72 @@ jobs:
             echo "❌ Ошибка: файл vless_configs.txt отсутствует или пустой!"
             exit 1
           fi
-          echo "✅ Локальный файл успешно сгенерирован."
 
-      - name: Configure Git for main repo
+      - name: Configure Git
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Commit and Push to GitHub (Full Repo)
+      - name: Commit to GitHub Main Repo
         run: |
           git add vless_configs.txt
           if git diff --staged --quiet; then
-            echo "⚠️ Нет изменений. Пропускаем коммит в основной репозиторий."
+            echo "Нет изменений для основного репозитория."
           else
-            git commit -m "chore: обновлены конфигурации VLESS [skip ci]"
+            git commit -m "chore: update local configs [skip ci]"
             git push origin main
-            echo "✅ Основной репозиторий GitHub обновлен."
           fi
 
-      - name: Sync Exact Files to SourceCraft
+      - name: FORCE SYNC to SourceCraft (Nuclear Option)
         env:
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
           EXT_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
           EXT_URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
         run: |
-          mkdir sourcecraft-temp
-          cd sourcecraft-temp
+          # 1. Создаем ЧИСТУЮ папку
+          rm -rf sync-temp
+          mkdir sync-temp
+          cd sync-temp
           
+          # 2. Инициализируем пустой репозиторий
           git init -b main
           git remote add origin "$SOURCECRAFT_URL"
-          git pull origin main || echo "Репозиторий SourceCraft пуст"
           
-          echo "Очищаем старые файлы..."
+          # 3. Пытаемся скачать историю. Если не получается (пустой репо) - не страшно.
+          git fetch origin || true
+          
+          # 4. ЖЕСТКО сбрасываем состояние до того, что сейчас на сервере SourceCraft
+          # Это гарантирует, что мы не тащим за собой старый мусор
+          git checkout -f origin/main 2>/dev/null || git checkout --orphan main
+          
+          # 5. Удаляем ВСЕ .txt файлы физически
           find . -maxdepth 1 -type f -name "*.txt" -delete
           
+          # 6. Копируем свежий локальный файл
           cp ../vless_configs.txt .
           
-          echo "Скачиваем внешние подписки с принудительным сбросом кэша..."
-          # Добавляем ?t=текущее_время прямо в URL. Это гарантированно ломает кэш GitHub CDN
-          curl -sS -f -H "Cache-Control: no-cache" -o vless_universal.txt "${EXT_URL_1}?t=$(date +%s)" || echo "⚠️ Ошибка скачивания vless_universal.txt"
+          # 7. Скачиваем внешние файлы с таймстампом (гарантия обхода кэша)
+          echo "Скачиваем zieng2..."
+          curl -sS -f -H "Cache-Control: no-cache" -o vless_universal.txt "${EXT_URL_1}?t=$(date +%s)"
           
-          curl -sS -f -H "Cache-Control: no-cache" -o Vless-Reality-White-Lists-Rus-Mobile.txt "${EXT_URL_2}?t=$(date +%s)" || echo "⚠️ Ошибка скачивания Vless-Reality"
+          echo "Скачиваем igareck..."
+          curl -sS -f -H "Cache-Control: no-cache" -o Vless-Reality-White-Lists-Rus-Mobile.txt "${EXT_URL_2}?t=$(date +%s)"
           
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 8. ДИАГНОСТИКА: Показываем размер файлов прямо сейчас
+          echo "--- РАЗМЕРЫ ФАЙЛОВ ПЕРЕД ОТПРАВКОЙ ---"
+          wc -c *.txt
+          echo "--------------------------------------"
           
+          # 9. Добавляем всё и форсируем отправку
           git add -A
           
-          if git diff --staged --quiet; then
-            echo "⚠️ Нет изменений в файлах. Пропускаем отправку."
-          else
-            git commit -m "chore: синхронизация файлов с обходом кэша"
-            git push -u origin main
-            echo "✅ Файлы успешно отправлены на SourceCraft!"
-          fi
+          # Всегда делаем коммит, даже если Git думает, что изменений нет. 
+          # Это нужно, чтобы обновить дату на сайте SourceCraft.
+          git commit --allow-empty -m "chore: forced sync $(date +%s)" || true
+          git add -A
+          git commit -m "chore: actual file update" || true
+          
+          # ПРИНУДИТЕЛЬНЫЙ ПУШ. Перезаписывает ветку main на сервере без вопросов.
+          git push origin main --force
+          
+          echo "✅ ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ ЗАВЕРШЕНА!"
