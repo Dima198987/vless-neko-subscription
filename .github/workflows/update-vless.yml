@@ -3,7 +3,7 @@ name: Aggregate and Smart Sync to SourceCraft
 on:
   workflow_dispatch:
   schedule:
-    - cron: '12,42 * * * *'
+    - cron: '0,30 * * * *' # Запуск в 00 и 30 минут каждого часа
 
 permissions:
   contents: write
@@ -40,18 +40,20 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Commit to GitHub Main Repo
+      - name: HEARTBEAT - Keep repo active
         run: |
-          git add vless_configs.txt
-          
-          # Всегда добавляем timestamp в файл, чтобы Git видел изменение
-          echo "# Last update: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> vless_configs.txt
-          
-          git add vless_configs.txt
-          git commit -m "chore: update local configs $(date +%s) [skip ci]" || echo "No changes"
+          echo "Last check: $(date)" > heartbeat.txt
+          git add heartbeat.txt
+          git commit -m "heartbeat: keep scheduler alive" || echo "No changes"
           git push origin main || true
 
-      - name: SMART SYNC to SourceCraft
+      - name: Commit configs to GitHub
+        run: |
+          git add vless_configs.txt
+          git commit -m "chore: update configs [skip ci]" || echo "No changes in configs"
+          git push origin main || true
+
+      - name: SYNC to SourceCraft
         env:
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
           EXT_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
@@ -69,14 +71,12 @@ jobs:
           find . -maxdepth 1 -type f -name "*.txt" -delete
           cp ../vless_configs.txt .
           
-          # Скачиваем с обходом кэша
           curl -sS -f -H "Cache-Control: no-cache" -o vless_universal.txt "${EXT_URL_1}?nocache=$(date +%s%N)" || echo "⚠️ Ошибка zieng2"
           curl -sS -f -H "Cache-Control: no-cache" -o Vless-Reality-White-Lists-Rus-Mobile.txt "${EXT_URL_2}?nocache=$(date +%s%N)" || echo "⚠️ Ошибка igareck"
           
           echo "--- РАЗМЕРЫ ФАЙЛОВ ---"
           wc -c *.txt
           
-          # Всегда коммитим, чтобы обновить дату на SourceCraft
           git add -A
           git commit -m "chore: sync $(date +%s)" || echo "No changes"
           git push origin main --force || true
