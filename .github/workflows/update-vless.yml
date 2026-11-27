@@ -1,9 +1,9 @@
-name: Aggregate and Force Sync to SourceCraft
+name: Aggregate and Smart Sync to SourceCraft
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '12,42 * * * *' # Запуск каждые ~30 минут
+    - cron: '12,42 * * * *'
 
 permissions:
   contents: write
@@ -43,16 +43,20 @@ jobs:
       - name: Commit to GitHub Main Repo
         run: |
           git add vless_configs.txt
-          git commit -m "chore: update local configs [skip ci]" || echo "No changes in main repo"
-          git push origin main || true
+          if git diff --staged --quiet; then
+            echo "Нет изменений для основного репозитория."
+          else
+            git commit -m "chore: update local configs [skip ci]"
+            git push origin main
+          fi
 
-      - name: FORCE UPDATE SourceCraft (Без сравнений)
+      - name: SMART SYNC to SourceCraft (С логикой сравнения)
         env:
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
           EXT_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
           EXT_URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
         run: |
-          # 1. Полная очистка
+          # 1. Создаем чистую папку
           rm -rf sync-temp
           mkdir sync-temp
           cd sync-temp
@@ -62,30 +66,62 @@ jobs:
           git remote add origin "$SOURCECRAFT_URL"
           git fetch origin || true
           
-          # 3. Синхронизация ветки (исправляет detached HEAD)
+          # 3. Синхронизация с сервером
           git checkout -B main origin/main || git checkout --orphan main
           
-          # 4. Удаляем старые файлы
+          # 4. Сохраняем старые версии для сравнения
+          mkdir -p old-versions
+          cp vless_universal.txt old-versions/ 2>/dev/null || true
+          cp Vless-Reality-White-Lists-Rus-Mobile.txt old-versions/ 2>/dev/null || true
+          cp vless_configs.txt old-versions/ 2>/dev/null || true
+          
+          # 5. Удаляем старые файлы
           find . -maxdepth 1 -type f -name "*.txt" -delete
           
-          # 5. Добавляем TIMESTAMP в начало файла. Это ГАРАНТИРУЕТ, что Git увидит изменение каждый раз!
-          echo "# LAST_UPDATE: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" > vless_configs.txt
-          cat ../vless_configs.txt >> vless_configs.txt
+          # 6. Копируем свежий локальный файл
+          cp ../vless_configs.txt .
           
-          # 6. Скачиваем внешние файлы с обходом кэша
+          # 7. Скачиваем внешние файлы с обходом кэша
           echo "Скачиваем zieng2..."
           curl -sS -f -H "Cache-Control: no-cache" -o vless_universal.txt "${EXT_URL_1}?t=$(date +%s)" || echo "⚠️ Ошибка zieng2"
           
           echo "Скачиваем igareck..."
           curl -sS -f -H "Cache-Control: no-cache" -o Vless-Reality-White-Lists-Rus-Mobile.txt "${EXT_URL_2}?t=$(date +%s)" || echo "⚠️ Ошибка igareck"
           
-          echo "--- РАЗМЕРЫ ФАЙЛОВ ---"
+          echo "--- РАЗМЕРЫ НОВЫХ ФАЙЛОВ ---"
           wc -c *.txt
-          echo "----------------------"
+          echo "-----------------------------"
           
-          # 7. БЕЗУСЛОВНЫЙ коммит и пуш
-          git add -A
-          git commit -m "chore: forced update $(date +%s)"
-          git push origin main --force
+          # 8. СРАВНЕНИЕ: Проверяем, изменились ли файлы
+          CHANGED=false
           
-          echo "✅ БЕЗУСЛОВНОЕ ОБНОВЛЕНИЕ НА SOURCECRAFT ЗАВЕРШЕНО!"
+          if ! cmp -s vless_universal.txt old-versions/vless_universal.txt 2>/dev/null; then
+            echo "✅ vless_universal.txt изменился"
+            CHANGED=true
+          else
+            echo "⚠️ vless_universal.txt не изменился"
+          fi
+          
+          if ! cmp -s Vless-Reality-White-Lists-Rus-Mobile.txt old-versions/Vless-Reality-White-Lists-Rus-Mobile.txt 2>/dev/null; then
+            echo "✅ Vless-Reality-White-Lists-Rus-Mobile.txt изменился"
+            CHANGED=true
+          else
+            echo "⚠️ Vless-Reality-White-Lists-Rus-Mobile.txt не изменился"
+          fi
+          
+          if ! cmp -s vless_configs.txt old-versions/vless_configs.txt 2>/dev/null; then
+            echo "✅ vless_configs.txt изменился"
+            CHANGED=true
+          else
+            echo "⚠️ vless_configs.txt не изменился"
+          fi
+          
+          # 9. Коммитим только если есть изменения
+          if [ "$CHANGED" = true ]; then
+            git add -A
+            git commit -m "chore: smart sync - files updated"
+            git push origin main --force
+            echo "✅ Файлы обновлены и отправлены на SourceCraft!"
+          else
+            echo "⚠️ Ни один файл не изменился. Пропускаем отправку на SourceCraft."
+          fi
