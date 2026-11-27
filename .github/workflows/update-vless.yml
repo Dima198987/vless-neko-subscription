@@ -50,7 +50,7 @@ jobs:
             git push origin main
           fi
 
-      - name: FORCE SYNC to SourceCraft (Nuclear Option)
+      - name: FORCE SYNC to SourceCraft (Fixed Git Branching)
         env:
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
           EXT_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
@@ -61,45 +61,41 @@ jobs:
           mkdir sync-temp
           cd sync-temp
           
-          # 2. Инициализируем пустой репозиторий
+          # 2. Инициализируем репозиторий сразу с веткой main
           git init -b main
           git remote add origin "$SOURCECRAFT_URL"
           
-          # 3. Пытаемся скачать историю. Если не получается (пустой репо) - не страшно.
+          # 3. Получаем данные с сервера (игнорируем ошибку, если репозиторий абсолютно пуст)
           git fetch origin || true
           
-          # 4. ЖЕСТКО сбрасываем состояние до того, что сейчас на сервере SourceCraft
-          # Это гарантирует, что мы не тащим за собой старый мусор
-          git checkout -f origin/main 2>/dev/null || git checkout --orphan main
+          # 4. ЖЕСТКО приводим ветку main в соответствие с сервером (исправляет ошибку detached HEAD)
+          git reset --hard origin/main || true
           
-          # 5. Удаляем ВСЕ .txt файлы физически
+          # 5. Удаляем ВСЕ старые .txt файлы
           find . -maxdepth 1 -type f -name "*.txt" -delete
           
           # 6. Копируем свежий локальный файл
           cp ../vless_configs.txt .
           
-          # 7. Скачиваем внешние файлы с таймстампом (гарантия обхода кэша)
+          # 7. Скачиваем внешние файлы с обходом кэша
           echo "Скачиваем zieng2..."
           curl -sS -f -H "Cache-Control: no-cache" -o vless_universal.txt "${EXT_URL_1}?t=$(date +%s)"
           
           echo "Скачиваем igareck..."
           curl -sS -f -H "Cache-Control: no-cache" -o Vless-Reality-White-Lists-Rus-Mobile.txt "${EXT_URL_2}?t=$(date +%s)"
           
-          # 8. ДИАГНОСТИКА: Показываем размер файлов прямо сейчас
+          # 8. ДИАГНОСТИКА
           echo "--- РАЗМЕРЫ ФАЙЛОВ ПЕРЕД ОТПРАВКОЙ ---"
           wc -c *.txt
           echo "--------------------------------------"
           
-          # 9. Добавляем всё и форсируем отправку
+          # 9. Добавляем все изменения
           git add -A
           
-          # Всегда делаем коммит, даже если Git думает, что изменений нет. 
-          # Это нужно, чтобы обновить дату на сайте SourceCraft.
-          git commit --allow-empty -m "chore: forced sync $(date +%s)" || true
-          git add -A
-          git commit -m "chore: actual file update" || true
+          # 10. Коммитим (даже если изменений нет, чтобы обновить дату на сайте)
+          git commit --allow-empty -m "chore: forced sync $(date +%s)"
           
-          # ПРИНУДИТЕЛЬНЫЙ ПУШ. Перезаписывает ветку main на сервере без вопросов.
+          # 11. ПРИНУДИТЕЛЬНЫЙ ПУШ. Теперь он сработает, так как ветка main существует и корректна
           git push origin main --force
           
-          echo "✅ ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ ЗАВЕРШЕНА!"
+          echo "✅ ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ УСПЕШНО ЗАВЕРШЕНА!"
