@@ -194,4 +194,4 @@ def main():
     print(f"\n🎉 Файл {OUTPUT_FILE} успешно обновлен!")
 
 if __name__ == "__main__":
-    main()
+    main() 
