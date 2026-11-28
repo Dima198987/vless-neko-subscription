@@ -46,7 +46,7 @@ jobs:
           git commit -m "chore: update configs [skip ci]" || echo "No changes"
           git push origin main || true
 
-      - name: SYNC to SourceCraft with FULL DIAGNOSTICS
+      - name: FORCE UPDATE SourceCraft (Inject Timestamp)
         env:
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
         run: |
@@ -60,55 +60,28 @@ jobs:
           git checkout -B main origin/main || git checkout --orphan main
           
           find . -maxdepth 1 -type f -name "*.txt" -delete
-          cp ../vless_configs.txt .
           
-          echo "=========================================="
-          echo "🔥 СКАЧИВАЕМ ЧЕРЕЗ GITHUB API С ДИАГНОСТИКОЙ"
-          echo "=========================================="
+          # 1. Обрабатываем локальный файл: добавляем гигантский заголовок с временем
+          echo "# === ОБНОВЛЕНО: $(date -u +"%Y-%m-%d %H:%M:%S UTC") ===" > temp_vless.txt
+          cat ../vless_configs.txt >> temp_vless.txt
+          mv temp_vless.txt vless_configs.txt
           
-          # Скачиваем через GitHub API с заголовком для обхода кэша
-          echo "Скачиваем zieng2..."
-          curl -sS -H "Accept: application/vnd.github.v3.raw" \
-            -H "Cache-Control: no-cache" \
-            -o vless_universal.txt \
-            "https://api.github.com/repos/zieng2/wl/contents/vless_universal.txt?ref=main&nocache=$(date +%s)" || echo "⚠️ Ошибка zieng2"
+          # 2. Скачиваем внешние файлы
+          curl -sS -H "Accept: application/vnd.github.v3.raw" -H "Cache-Control: no-cache" -o temp_zieng2.txt "https://api.github.com/repos/zieng2/wl/contents/vless_universal.txt?ref=main&nocache=$(date +%s)"
+          echo "# === ОБНОВЛЕНО: $(date -u +"%Y-%m-%d %H:%M:%S UTC") ===" > vless_universal.txt
+          cat temp_zieng2.txt >> vless_universal.txt
           
-          echo "Скачиваем igareck..."
-          curl -sS -H "Accept: application/vnd.github.v3.raw" \
-            -H "Cache-Control: no-cache" \
-            -o Vless-Reality-White-Lists-Rus-Mobile.txt \
-            "https://api.github.com/repos/igareck/vpn-configs-for-russia/contents/Vless-Reality-White-Lists-Rus-Mobile.txt?ref=main&nocache=$(date +%s)" || echo "⚠️ Ошибка igareck"
+          curl -sS -H "Accept: application/vnd.github.v3.raw" -H "Cache-Control: no-cache" -o temp_igareck.txt "https://api.github.com/repos/igareck/vpn-configs-for-russia/contents/Vless-Reality-White-Lists-Rus-Mobile.txt?ref=main&nocache=$(date +%s)"
+          echo "# === ОБНОВЛЕНО: $(date -u +"%Y-%m-%d %H:%M:%S UTC") ===" > Vless-Reality-White-Lists-Rus-Mobile.txt
+          cat temp_igareck.txt >> Vless-Reality-White-Lists-Rus-Mobile.txt
           
-          echo ""
-          echo "=========================================="
-          echo "📊 ДЕТАЛЬНАЯ ДИАГНОСТИКА ФАЙЛОВ"
-          echo "=========================================="
-          
-          echo "vless_universal.txt:"
-          echo "  Размер: $(wc -c < vless_universal.txt) байт"
-          echo "  Строк: $(wc -l < vless_universal.txt)"
-          echo "  Строк с vless://: $(grep -c 'vless://' vless_universal.txt || echo 0)"
-          echo "  Строк с vmess://: $(grep -c 'vmess://' vless_universal.txt || echo 0)"
-          echo "  MD5: $(md5sum vless_universal.txt | cut -d' ' -f1)"
-          echo "  Последние 5 серверов:"
-          grep -E 'vless://|vmess://' vless_universal.txt | tail -n 5 | sed 's/^/    /'
-          echo ""
-          
-          echo "Vless-Reality-White-Lists-Rus-Mobile.txt:"
-          echo "  Размер: $(wc -c < Vless-Reality-White-Lists-Rus-Mobile.txt) байт"
-          echo "  Строк: $(wc -l < Vless-Reality-White-Lists-Rus-Mobile.txt)"
-          echo "  Строк с vless://: $(grep -c 'vless://' Vless-Reality-White-Lists-Rus-Mobile.txt || echo 0)"
-          echo "  MD5: $(md5sum Vless-Reality-White-Lists-Rus-Mobile.txt | cut -d' ' -f1)"
-          echo "  Последние 5 серверов:"
-          grep -E 'vless://' Vless-Reality-White-Lists-Rus-Mobile.txt | tail -n 5 | sed 's/^/    /'
-          echo ""
-          
-          echo "=========================================="
+          echo "--- РАЗМЕРЫ ФАЙЛОВ ---"
+          wc -c *.txt
+          echo "ПЕРВАЯ СТРОКА vless_universal.txt:"
+          head -n 1 vless_universal.txt
           
           git add -A
-          git commit -m "chore: sync $(date +%s)" || echo "No changes"
+          git commit -m "chore: force update with timestamp $(date +%s)" || echo "No changes"
           git push origin main --force || true
           
-          echo "✅ Синхронизация завершена!"
-          echo ""
-          echo "⚠️ ВАЖНО: Скопируйте блок '📊 ДЕТАЛЬНАЯ ДИАГНОСТИКА ФАЙЛОВ' и пришлите мне!"
+          echo "✅ ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ С ТАЙМСТАМПОМ ЗАВЕРШЕНО!"
