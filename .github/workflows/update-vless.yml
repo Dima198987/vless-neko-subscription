@@ -1,9 +1,9 @@
-name: Aggregate and Smart Sync to SourceCraft
+name: Aggregate and Sync to SourceCraft
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0,30 * * * *'
+    - cron: '0,30 * * * *' # Каждые 30 минут
 
 permissions:
   contents: write
@@ -46,9 +46,11 @@ jobs:
           git commit -m "chore: update configs [skip ci]" || echo "No changes"
           git push origin main || true
 
-      - name: FORCE UPDATE SourceCraft (Inject Timestamp)
+      - name: Sync to SourceCraft
         env:
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
+          EXT_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
+          EXT_URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
         run: |
           rm -rf sync-temp
           mkdir sync-temp
@@ -60,28 +62,13 @@ jobs:
           git checkout -B main origin/main || git checkout --orphan main
           
           find . -maxdepth 1 -type f -name "*.txt" -delete
+          cp ../vless_configs.txt .
           
-          # 1. Обрабатываем локальный файл: добавляем гигантский заголовок с временем
-          echo "# === ОБНОВЛЕНО: $(date -u +"%Y-%m-%d %H:%M:%S UTC") ===" > temp_vless.txt
-          cat ../vless_configs.txt >> temp_vless.txt
-          mv temp_vless.txt vless_configs.txt
-          
-          # 2. Скачиваем внешние файлы
-          curl -sS -H "Accept: application/vnd.github.v3.raw" -H "Cache-Control: no-cache" -o temp_zieng2.txt "https://api.github.com/repos/zieng2/wl/contents/vless_universal.txt?ref=main&nocache=$(date +%s)"
-          echo "# === ОБНОВЛЕНО: $(date -u +"%Y-%m-%d %H:%M:%S UTC") ===" > vless_universal.txt
-          cat temp_zieng2.txt >> vless_universal.txt
-          
-          curl -sS -H "Accept: application/vnd.github.v3.raw" -H "Cache-Control: no-cache" -o temp_igareck.txt "https://api.github.com/repos/igareck/vpn-configs-for-russia/contents/Vless-Reality-White-Lists-Rus-Mobile.txt?ref=main&nocache=$(date +%s)"
-          echo "# === ОБНОВЛЕНО: $(date -u +"%Y-%m-%d %H:%M:%S UTC") ===" > Vless-Reality-White-Lists-Rus-Mobile.txt
-          cat temp_igareck.txt >> Vless-Reality-White-Lists-Rus-Mobile.txt
-          
-          echo "--- РАЗМЕРЫ ФАЙЛОВ ---"
-          wc -c *.txt
-          echo "ПЕРВАЯ СТРОКА vless_universal.txt:"
-          head -n 1 vless_universal.txt
+          curl -sS -f -H "Cache-Control: no-cache" -o vless_universal.txt "${EXT_URL_1}?nocache=$(date +%s)" || echo "⚠️ Ошибка zieng2"
+          curl -sS -f -H "Cache-Control: no-cache" -o Vless-Reality-White-Lists-Rus-Mobile.txt "${EXT_URL_2}?nocache=$(date +%s)" || echo "⚠️ Ошибка igareck"
           
           git add -A
-          git commit -m "chore: force update with timestamp $(date +%s)" || echo "No changes"
+          git commit -m "chore: sync $(date +%s)" || echo "No changes"
           git push origin main --force || true
           
-          echo "✅ ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ С ТАЙМСТАМПОМ ЗАВЕРШЕНО!"
+          echo "✅ Синхронизация завершена!"
