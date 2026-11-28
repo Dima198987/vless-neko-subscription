@@ -3,7 +3,7 @@ name: Aggregate and Smart Sync to SourceCraft
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0,30 * * * *' # Запуск в 00 и 30 минут каждого часа
+    - cron: '0,30 * * * *'
 
 permissions:
   contents: write
@@ -40,24 +40,15 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: HEARTBEAT - Keep repo active
-        run: |
-          echo "Last check: $(date)" > heartbeat.txt
-          git add heartbeat.txt
-          git commit -m "heartbeat: keep scheduler alive" || echo "No changes"
-          git push origin main || true
-
-      - name: Commit configs to GitHub
+      - name: Commit to GitHub Main Repo
         run: |
           git add vless_configs.txt
-          git commit -m "chore: update configs [skip ci]" || echo "No changes in configs"
+          git commit -m "chore: update configs [skip ci]" || echo "No changes"
           git push origin main || true
 
-      - name: SYNC to SourceCraft
+      - name: SYNC to SourceCraft (Via GitHub API - Bypass Cache)
         env:
           SOURCECRAFT_URL: "https://anyname:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/dmartyan/vless-sub.git"
-          EXT_URL_1: "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
-          EXT_URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
         run: |
           rm -rf sync-temp
           mkdir sync-temp
@@ -71,14 +62,30 @@ jobs:
           find . -maxdepth 1 -type f -name "*.txt" -delete
           cp ../vless_configs.txt .
           
-          curl -sS -f -H "Cache-Control: no-cache" -o vless_universal.txt "${EXT_URL_1}?nocache=$(date +%s%N)" || echo "⚠️ Ошибка zieng2"
-          curl -sS -f -H "Cache-Control: no-cache" -o Vless-Reality-White-Lists-Rus-Mobile.txt "${EXT_URL_2}?nocache=$(date +%s%N)" || echo "⚠️ Ошибка igareck"
+          echo "=========================================="
+          echo "🔥 СКАЧИВАЕМ ЧЕРЕЗ GITHUB API (обход кэша)"
+          echo "=========================================="
           
+          # Скачиваем через GitHub API - это обходит Raw CDN кэш
+          echo "Скачиваем zieng2 через API..."
+          curl -sS -H "Accept: application/vnd.github.v3.raw" \
+            -o vless_universal.txt \
+            "https://api.github.com/repos/zieng2/wl/contents/vless_universal.txt?ref=main" || echo "⚠️ Ошибка zieng2"
+          
+          echo "Скачиваем igareck через API..."
+          curl -sS -H "Accept: application/vnd.github.v3.raw" \
+            -o Vless-Reality-White-Lists-Rus-Mobile.txt \
+            "https://api.github.com/repos/igareck/vpn-configs-for-russia/contents/Vless-Reality-White-Lists-Rus-Mobile.txt?ref=main" || echo "⚠️ Ошибка igareck"
+          
+          echo ""
           echo "--- РАЗМЕРЫ ФАЙЛОВ ---"
           wc -c *.txt
+          echo "Первые 3 строки vless_universal.txt:"
+          head -n 3 vless_universal.txt
+          echo ""
           
           git add -A
-          git commit -m "chore: sync $(date +%s)" || echo "No changes"
+          git commit -m "chore: sync via API $(date +%s)" || echo "No changes"
           git push origin main --force || true
           
-          echo "✅ Синхронизация завершена!"
+          echo "✅ Синхронизация через GitHub API завершена!"
